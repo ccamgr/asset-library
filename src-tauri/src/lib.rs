@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use thiserror::Error;
 use uuid::Uuid;
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 const SETTINGS_FILE: &str = "settings.json";
 const DATABASE_FILE: &str = "library.db";
@@ -97,6 +98,10 @@ struct InitializeLibraryRequest {
 struct ImportRequest {
     title: String,
     source_paths: Vec<String>,
+    #[serde(default)]
+    tag_ids: Vec<String>,
+    #[serde(default)]
+    category_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +111,30 @@ struct ImportResult {
     title: String,
     file_count: usize,
     total_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyDirectoryImportRequest {
+    directory_path: String,
+    #[serde(default)]
+    tag_ids: Vec<String>,
+    #[serde(default)]
+    category_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyImportFailure {
+    source_filename: String,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyDirectoryImportResult {
+    imported: Vec<ImportResult>,
+    failures: Vec<LegacyImportFailure>,
 }
 
 #[derive(Debug, Serialize)]
@@ -328,8 +357,88 @@ fn import_files(
         .asset_storage_path
         .unwrap_or_else(|| library_path.join("assets"));
 
-    import_into_library(&library_path, &asset_storage_path, request)
-        .map_err(|error| error.to_string())
+    let tag_ids = request.tag_ids.clone();
+    let category_ids = request.category_ids.clone();
+    let result = import_into_library(&library_path, &asset_storage_path, request)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = assign_import_labels(
+        &library_path.join(DATABASE_FILE),
+        &result.asset_id,
+        &tag_ids,
+        &category_ids,
+    ) {
+        let _ = remove_imported_asset(
+            &library_path.join(DATABASE_FILE),
+            &asset_storage_path,
+            &result.asset_id,
+        );
+        return Err(error.to_string());
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn import_legacy_directory(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: LegacyDirectoryImportRequest,
+) -> Result<LegacyDirectoryImportResult, String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let directory = PathBuf::from(request.directory_path.trim());
+    if !directory.is_dir() {
+        return Err("取り込み元としてフォルダを指定してください".into());
+    }
+
+    let mut archives = fs::read_dir(&directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+        })
+        .collect::<Vec<_>>();
+    archives.sort();
+
+    let mut imported = Vec::new();
+    let mut failures = Vec::new();
+    for archive in archives {
+        let source_filename = archive
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("(名前を取得できないZIP)")
+            .to_owned();
+        match import_legacy_archive(&locations, &archive) {
+            Ok(result) => {
+                if let Err(error) = assign_import_labels(
+                    &locations.library_root.join(DATABASE_FILE),
+                    &result.asset_id,
+                    &request.tag_ids,
+                    &request.category_ids,
+                ) {
+                    let _ = remove_imported_asset(
+                        &locations.library_root.join(DATABASE_FILE),
+                        &locations.asset_storage_root,
+                        &result.asset_id,
+                    );
+                    failures.push(LegacyImportFailure {
+                        source_filename,
+                        reason: format!("ラベルの設定に失敗しました: {error}"),
+                    });
+                } else {
+                    imported.push(result);
+                }
+            }
+            Err(error) => failures.push(LegacyImportFailure {
+                source_filename,
+                reason: error.to_string(),
+            }),
+        }
+    }
+    Ok(LegacyDirectoryImportResult { imported, failures })
 }
 
 #[tauri::command]
@@ -1134,6 +1243,193 @@ fn import_into_library(
     import_result
 }
 
+fn import_legacy_archive(
+    locations: &StorageLocations,
+    archive_path: &Path,
+) -> LibraryResult<ImportResult> {
+    let database_path = locations.library_root.join(DATABASE_FILE);
+    if !database_path.is_file() {
+        return Err(LibraryError::Message(
+            "ライブラリが初期化されていません".into(),
+        ));
+    }
+
+    let archive_file = File::open(archive_path)?;
+    let mut archive = ZipArchive::new(BufReader::new(archive_file))
+        .map_err(|error| LibraryError::Message(format!("ZIPを開けません: {error}")))?;
+    let names = (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .map(|entry| entry.name().to_owned())
+                .map_err(|error| LibraryError::Message(format!("ZIPを読み取れません: {error}")))
+        })
+        .collect::<LibraryResult<Vec<_>>>()?;
+    let info_name = names
+        .iter()
+        .find(|name| name.as_str() == "_assetinfo.md")
+        .ok_or_else(|| LibraryError::Message("_assetinfo.md がありません".into()))?;
+    let thumbnail_name = names
+        .iter()
+        .find(|name| name.as_str() == "_thumbnail.jpg")
+        .ok_or_else(|| LibraryError::Message("_thumbnail.jpg がありません".into()))?;
+
+    let mut roots = names
+        .iter()
+        .filter_map(|name| archive_root_directory(name))
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots.dedup();
+    if roots.len() != 1 {
+        return Err(LibraryError::Message(
+            "商品ファイルの最上位ディレクトリを1つだけ含めてください".into(),
+        ));
+    }
+    let product_directory = roots.remove(0);
+    let title = safe_archive_name(&product_directory)?;
+    let info = read_zip_entry(&mut archive, info_name)?;
+    let thumbnail = read_zip_entry(&mut archive, thumbnail_name)?;
+    let product_prefix = format!("{product_directory}/");
+    let product_entries = names
+        .iter()
+        .filter(|name| name.starts_with(&product_prefix))
+        .cloned()
+        .collect::<Vec<_>>();
+    if product_entries.is_empty() {
+        return Err(LibraryError::Message("商品ディレクトリが空です".into()));
+    }
+    if product_entries.iter().any(|name| !safe_archive_entry(name)) {
+        return Err(LibraryError::Message(
+            "ZIP内に安全でないパスが含まれています".into(),
+        ));
+    }
+
+    let asset_id = Uuid::now_v7().to_string();
+    let staging_asset_dir = std::env::temp_dir().join("VRAssetLibrary").join(&asset_id);
+    let staging_files_dir = staging_asset_dir.join("files");
+    fs::create_dir_all(&staging_files_dir)?;
+    let result = (|| -> LibraryResult<ImportResult> {
+        let file_id = Uuid::now_v7().to_string();
+        let original_filename = format!("{title}.zip");
+        let stored_filename = format!("{file_id}-{original_filename}");
+        let staged_zip = staging_files_dir.join(&stored_filename);
+        let byte_size = write_product_archive(&mut archive, &product_entries, &staged_zip)?;
+        fs::write(staging_asset_dir.join("cover.jpg"), thumbnail)?;
+
+        let files = vec![ImportedFile {
+            id: file_id,
+            original_filename,
+            stored_filename,
+            byte_size,
+        }];
+        let asset_directory = locations.asset_storage_root.join("assets").join(&asset_id);
+        copy_staged_asset(&staging_asset_dir, &asset_directory, &files)?;
+        let info = String::from_utf8_lossy(&info);
+        let (product_url, note) = parse_legacy_asset_info(&info);
+        let database_result = insert_legacy_imported_asset(
+            &database_path,
+            &asset_id,
+            &title,
+            product_url.as_deref(),
+            note.as_deref(),
+            &files,
+        );
+        if let Err(error) = database_result {
+            let _ = fs::remove_dir_all(&asset_directory);
+            return Err(error);
+        }
+        Ok(ImportResult {
+            asset_id,
+            title,
+            file_count: files.len(),
+            total_bytes: byte_size,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging_asset_dir);
+    }
+    result
+}
+
+fn archive_root_directory(name: &str) -> Option<String> {
+    if name.starts_with('_') || !safe_archive_entry(name) {
+        return None;
+    }
+    let mut components = Path::new(name).components();
+    let Component::Normal(first) = components.next()? else {
+        return None;
+    };
+    if components.next().is_none() && !name.ends_with('/') {
+        return None;
+    }
+    first.to_str().map(ToOwned::to_owned)
+}
+
+fn safe_archive_entry(name: &str) -> bool {
+    !name.is_empty()
+        && Path::new(name)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+}
+
+fn safe_archive_name(name: &str) -> LibraryResult<String> {
+    safe_filename(Path::new(name))
+}
+
+fn read_zip_entry<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+) -> LibraryResult<Vec<u8>> {
+    let mut entry = archive
+        .by_name(name)
+        .map_err(|error| LibraryError::Message(format!("ZIP内の {name} を読めません: {error}")))?;
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn write_product_archive<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    entries: &[String],
+    destination: &Path,
+) -> LibraryResult<u64> {
+    let output = File::create(destination)?;
+    let mut writer = ZipWriter::new(BufWriter::new(output));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    for name in entries {
+        let mut entry = archive.by_name(name).map_err(|error| {
+            LibraryError::Message(format!("ZIP内の {name} を読めません: {error}"))
+        })?;
+        if entry.is_dir() {
+            writer
+                .add_directory(name, options)
+                .map_err(|error| LibraryError::Message(format!("ZIPを作成できません: {error}")))?;
+        } else {
+            writer
+                .start_file(name, options)
+                .map_err(|error| LibraryError::Message(format!("ZIPを作成できません: {error}")))?;
+            std::io::copy(&mut entry, &mut writer)?;
+        }
+    }
+    let output = writer
+        .finish()
+        .map_err(|error| LibraryError::Message(format!("ZIPを作成できません: {error}")))?;
+    output.get_ref().sync_all()?;
+    Ok(fs::metadata(destination)?.len())
+}
+
+fn parse_legacy_asset_info(contents: &str) -> (Option<String>, Option<String>) {
+    let mut lines = contents.lines();
+    let first_line = lines.next().unwrap_or_default().trim();
+    let product_url = if first_line.starts_with("https://") || first_line.starts_with("http://") {
+        Some(first_line.to_owned())
+    } else {
+        None
+    };
+    let note = lines.collect::<Vec<_>>().join("\n");
+    (product_url, (!note.trim().is_empty()).then_some(note))
+}
+
 fn copy_staged_asset(
     staging_asset_dir: &Path,
     asset_directory: &Path,
@@ -1146,6 +1442,10 @@ fn copy_staged_asset(
             staging_asset_dir.join("files").join(&file.stored_filename),
             destination_files.join(&file.stored_filename),
         )?;
+    }
+    let staged_cover = staging_asset_dir.join("cover.jpg");
+    if staged_cover.is_file() {
+        fs::copy(staged_cover, asset_directory.join("cover.jpg"))?;
     }
     fs::remove_dir_all(staging_asset_dir)?;
     Ok(())
@@ -1235,6 +1535,79 @@ fn insert_imported_asset(
         )?;
     }
     transaction.commit()?;
+    Ok(())
+}
+
+fn insert_legacy_imported_asset(
+    database_path: &Path,
+    asset_id: &str,
+    title: &str,
+    product_url: Option<&str>,
+    note: Option<&str>,
+    files: &[ImportedFile],
+) -> LibraryResult<()> {
+    insert_imported_asset(database_path, asset_id, title, files)?;
+    let connection = Connection::open(database_path)?;
+    connection.execute(
+        "UPDATE assets
+         SET source = 'legacy archive import', product_url = ?1, note = ?2,
+             cover_path = ?3, updated_at = ?4
+         WHERE id = ?5",
+        params![
+            product_url,
+            note,
+            format!("assets/{asset_id}/cover.jpg"),
+            unix_timestamp(),
+            asset_id,
+        ],
+    )?;
+    Ok(())
+}
+
+fn assign_import_labels(
+    database_path: &Path,
+    asset_id: &str,
+    tag_ids: &[String],
+    category_ids: &[String],
+) -> LibraryResult<()> {
+    if tag_ids.is_empty() && category_ids.is_empty() {
+        return Ok(());
+    }
+    let mut connection = Connection::open(database_path)?;
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let transaction = connection.transaction()?;
+    for tag_id in tag_ids {
+        transaction.execute(
+            "INSERT OR IGNORE INTO asset_tags (asset_id, tag_id) VALUES (?1, ?2)",
+            params![asset_id, tag_id],
+        )?;
+    }
+    for category_id in category_ids {
+        transaction.execute(
+            "INSERT OR IGNORE INTO asset_categories (asset_id, category_id) VALUES (?1, ?2)",
+            params![asset_id, category_id],
+        )?;
+    }
+    transaction.execute(
+        "UPDATE assets SET updated_at = ?1 WHERE id = ?2",
+        params![unix_timestamp(), asset_id],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn remove_imported_asset(
+    database_path: &Path,
+    asset_storage_root: &Path,
+    asset_id: &str,
+) -> LibraryResult<()> {
+    let connection = Connection::open(database_path)?;
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    connection.execute("DELETE FROM assets WHERE id = ?1", params![asset_id])?;
+    let asset_directory = asset_storage_root.join("assets").join(asset_id);
+    if asset_directory.exists() {
+        fs::remove_dir_all(asset_directory)?;
+    }
     Ok(())
 }
 
@@ -1354,6 +1727,7 @@ pub fn run() {
             get_library_status,
             initialize_library,
             import_files,
+            import_legacy_directory,
             list_assets,
             get_asset_detail,
             update_asset,
@@ -1420,6 +1794,8 @@ mod tests {
                     display_path(&source.join("main.zip")),
                     display_path(&source.join("readme.txt")),
                 ],
+                tag_ids: vec![],
+                category_ids: vec![],
             },
         )
         .unwrap();
@@ -1442,6 +1818,72 @@ mod tests {
     }
 
     #[test]
+    fn imports_a_legacy_archive_and_preserves_product_directory() {
+        let root = std::env::temp_dir().join(format!("vr-asset-library-legacy-{}", Uuid::now_v7()));
+        let library = root.join("library");
+        let asset_storage = root.join("asset-storage");
+        let backups = root.join("backups");
+        let source_dir = root.join("source");
+        let source_zip = source_dir.join("legacy.zip");
+        fs::create_dir_all(&source_dir).unwrap();
+        prepare_library(&library, &asset_storage, &backups).unwrap();
+        {
+            let file = File::create(&source_zip).unwrap();
+            let mut writer = ZipWriter::new(file);
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            writer.start_file("_assetinfo.md", options).unwrap();
+            writer
+                .write_all("https://booth.pm/ja/items/123\n対応アバター: Example\n".as_bytes())
+                .unwrap();
+            writer.start_file("_thumbnail.jpg", options).unwrap();
+            writer.write_all(b"not-a-real-jpeg").unwrap();
+            writer.start_file("Product/readme.txt", options).unwrap();
+            writer.write_all(b"asset data").unwrap();
+            writer.finish().unwrap();
+        }
+        let locations = StorageLocations {
+            library_root: library.clone(),
+            asset_storage_root: asset_storage.clone(),
+            database_backup_root: backups,
+        };
+        let result = import_legacy_archive(&locations, &source_zip).unwrap();
+        assert_eq!(result.title, "Product");
+        assert_eq!(count_assets(&library.join(DATABASE_FILE)).unwrap(), 1);
+        assert!(asset_storage
+            .join("assets")
+            .join(&result.asset_id)
+            .join("cover.jpg")
+            .is_file());
+        let detail = Connection::open(library.join(DATABASE_FILE))
+            .unwrap()
+            .query_row(
+                "SELECT product_url, note FROM assets WHERE id = ?1",
+                params![result.asset_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(detail.0, "https://booth.pm/ja/items/123");
+        assert_eq!(detail.1, "対応アバター: Example");
+        let stored = fs::read_dir(
+            asset_storage
+                .join("assets")
+                .join(result.asset_id)
+                .join("files"),
+        )
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+        let archive = ZipArchive::new(File::open(stored).unwrap()).unwrap();
+        assert!(archive
+            .file_names()
+            .any(|name| name == "Product/readme.txt"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn database_snapshot_contains_imported_assets() {
         let root = std::env::temp_dir().join(format!("vr-asset-library-backup-{}", Uuid::now_v7()));
         let library = root.join("library");
@@ -1457,6 +1899,8 @@ mod tests {
             ImportRequest {
                 title: "Backup test".into(),
                 source_paths: vec![display_path(&source)],
+                tag_ids: vec![],
+                category_ids: vec![],
             },
         )
         .unwrap();
