@@ -10,7 +10,7 @@ use std::{
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 use uuid::Uuid;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
@@ -135,6 +135,13 @@ struct LegacyImportFailure {
 struct LegacyDirectoryImportResult {
     imported: Vec<ImportResult>,
     failures: Vec<LegacyImportFailure>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LegacyImportProgress {
+    completed: usize,
+    total: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -378,34 +385,26 @@ fn import_files(
 }
 
 #[tauri::command]
+fn count_legacy_archives(directory_path: String) -> Result<usize, String> {
+    legacy_archives(Path::new(directory_path.trim()))
+        .map(|archives| archives.len())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn import_legacy_directory(
     app: AppHandle,
     state: State<'_, AppState>,
     request: LegacyDirectoryImportRequest,
 ) -> Result<LegacyDirectoryImportResult, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let directory = PathBuf::from(request.directory_path.trim());
-    if !directory.is_dir() {
-        return Err("取り込み元としてフォルダを指定してください".into());
-    }
-
-    let mut archives = fs::read_dir(&directory)
-        .map_err(|error| error.to_string())?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-        })
-        .collect::<Vec<_>>();
-    archives.sort();
+    let archives = legacy_archives(Path::new(request.directory_path.trim()))
+        .map_err(|error| error.to_string())?;
+    let total = archives.len();
 
     let mut imported = Vec::new();
     let mut failures = Vec::new();
-    for archive in archives {
+    for (index, archive) in archives.into_iter().enumerate() {
         let source_filename = archive
             .file_name()
             .and_then(|name| name.to_str())
@@ -437,8 +436,36 @@ fn import_legacy_directory(
                 reason: error.to_string(),
             }),
         }
+        let _ = app.emit(
+            "legacy-import-progress",
+            LegacyImportProgress {
+                completed: index + 1,
+                total,
+            },
+        );
     }
     Ok(LegacyDirectoryImportResult { imported, failures })
+}
+
+fn legacy_archives(directory: &Path) -> LibraryResult<Vec<PathBuf>> {
+    if !directory.is_dir() {
+        return Err(LibraryError::Message(
+            "取り込み元としてフォルダを指定してください".into(),
+        ));
+    }
+    let mut archives = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+        })
+        .collect::<Vec<_>>();
+    archives.sort();
+    Ok(archives)
 }
 
 #[tauri::command]
@@ -1727,6 +1754,7 @@ pub fn run() {
             get_library_status,
             initialize_library,
             import_files,
+            count_legacy_archives,
             import_legacy_directory,
             list_assets,
             get_asset_detail,

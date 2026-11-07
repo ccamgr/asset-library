@@ -58,6 +58,8 @@ input { background: #16151c; border: 1px solid #494454; border-radius: 9px; colo
 .import-bar { align-items: center; background: #282334; border-radius: 10px; display: flex; gap: .5rem; margin-top: 1rem; padding: .65rem; }
 .import-bar input { min-width: 140px; }
 .import-bar span { color: #c6c0d0; font-size: .8rem; white-space: nowrap; }
+.import-progress { align-items: center; display: flex; gap: .45rem; min-width: 150px; }
+.import-progress progress { accent-color: #a882ff; height: .55rem; width: 90px; }
 .detail-empty { color: #bbb7c8; padding: 3rem 1rem; text-align: center; }
 .detail-pane label { font-size: .8rem; margin-top: 1rem; }
 .detail-pane label input, .detail-pane label textarea { display: block; margin-top: .35rem; width: 100%; }
