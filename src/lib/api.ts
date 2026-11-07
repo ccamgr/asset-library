@@ -26,8 +26,12 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
     case "set_asset_tags": { const asset = assets.find((item) => item.id === data.assetId); if (asset) asset.tags = tags.filter((tag) => data.ids.includes(tag.id)); return undefined as T; }
     case "set_asset_categories": { const asset = assets.find((item) => item.id === data.assetId); if (asset) asset.categories = categories.filter((category) => data.ids.includes(category.id)); return undefined as T; }
     case "create_tag": { const tag = { id: `tag-${nextId++}`, name: data.name, color: data.color ?? null }; tags.push(tag); return tag as T; }
+    case "delete_tag": { const index = tags.findIndex((tag) => tag.id === args?.tagId); if (index >= 0) tags.splice(index, 1); assets.forEach((asset) => { asset.tags = asset.tags.filter((tag: AnyRecord) => tag.id !== args?.tagId); }); return undefined as T; }
     case "create_category": { const category = { id: `cat-${nextId++}`, name: data.name }; categories.push(category); return category as T; }
     case "add_asset_relation": return undefined as T;
+    case "delete_asset": { const index = assets.findIndex((asset) => asset.id === args?.assetId); if (index >= 0) assets.splice(index, 1); return undefined as T; }
+    case "add_asset_files": { const asset = assets.find((item) => item.id === data.assetId); if (asset) asset.files.push(...(data.sourcePaths ?? []).map((path: string) => ({ id: `file-${nextId++}`, originalFilename: path.split(/[\\/]/).pop(), byteSize: 0 }))); return undefined as T; }
+    case "delete_asset_file": { assets.forEach((asset) => { asset.files = asset.files.filter((file: AnyRecord) => file.id !== args?.fileId); }); return undefined as T; }
     case "count_legacy_archives": return 3 as T;
     case "import_legacy_directory": return { imported: [], failures: [] } as T;
     case "create_database_backup": return { path: "ブラウザプレビュー/mock-backup.db" } as T;

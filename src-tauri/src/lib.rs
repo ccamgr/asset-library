@@ -240,6 +240,13 @@ struct AssetAssignmentRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AssetFilesRequest {
+    asset_id: String,
+    source_paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NamedEntityRequest {
     name: String,
     color: Option<String>,
@@ -610,6 +617,164 @@ fn create_tag(
             },
         )
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_tag(app: AppHandle, state: State<'_, AppState>, tag_id: String) -> Result<(), String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute("DELETE FROM tags WHERE id=?1", params![tag_id])
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_asset(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    asset_id: String,
+) -> Result<(), String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    remove_imported_asset(
+        &locations.library_root.join(DATABASE_FILE),
+        &locations.asset_storage_root,
+        &asset_id,
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_asset_files(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: AssetFilesRequest,
+) -> Result<(), String> {
+    if request.source_paths.is_empty() {
+        return Err("少なくとも1つのファイルを選んでください".into());
+    }
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let database_path = locations.library_root.join(DATABASE_FILE);
+    let destination = asset_files_directory(&locations.asset_storage_root, &request.asset_id)
+        .map_err(|error| error.to_string())?;
+    let connection = Connection::open(&database_path).map_err(|error| error.to_string())?;
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)",
+            params![request.asset_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !exists {
+        return Err("アセットが見つかりません".into());
+    }
+
+    let sources = request
+        .source_paths
+        .into_iter()
+        .map(PathBuf::from)
+        .map(|source| {
+            let metadata = fs::metadata(&source)?;
+            if !metadata.is_file() {
+                return Err(LibraryError::Message("通常ファイルのみ追加できます".into()));
+            }
+            Ok((source, metadata.len()))
+        })
+        .collect::<LibraryResult<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+
+    fs::create_dir_all(&destination).map_err(|error| error.to_string())?;
+    let mut files = Vec::new();
+    for (source, byte_size) in sources {
+        let id = Uuid::now_v7().to_string();
+        let original_filename = safe_filename(&source).map_err(|error| error.to_string())?;
+        let stored_filename = format!("{id}-{original_filename}");
+        let target = destination.join(&stored_filename);
+        if let Err(error) = fs::copy(&source, &target) {
+            let _ = fs::remove_file(target);
+            cleanup_added_files(&destination, &files);
+            return Err(error.to_string());
+        }
+        files.push(ImportedFile {
+            id,
+            original_filename,
+            stored_filename,
+            byte_size,
+        });
+    }
+    let mut connection = connection;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let timestamp = unix_timestamp();
+    let result = (|| -> LibraryResult<()> {
+        for file in &files {
+            transaction.execute("INSERT INTO asset_files (id, asset_id, storage_mode, relative_path, external_path, original_filename, byte_size, sha256, created_at) VALUES (?1, ?2, 'managed', ?3, NULL, ?4, ?5, NULL, ?6)", params![file.id, request.asset_id, format!("assets/{}/files/{}", request.asset_id, file.stored_filename), file.original_filename, file.byte_size as i64, timestamp])?;
+        }
+        transaction.execute(
+            "UPDATE assets SET updated_at=?1 WHERE id=?2",
+            params![timestamp, request.asset_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        cleanup_added_files(&destination, &files);
+    }
+    result.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_asset_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    file_id: String,
+) -> Result<(), String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let database_path = locations.library_root.join(DATABASE_FILE);
+    let connection = Connection::open(&database_path).map_err(|error| error.to_string())?;
+    let (asset_id, storage_mode, relative): (String, String, Option<String>) = connection
+        .query_row(
+            "SELECT asset_id, storage_mode, relative_path FROM asset_files WHERE id=?1",
+            params![file_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    if storage_mode == "managed" {
+        let filename = Path::new(
+            relative
+                .as_deref()
+                .ok_or_else(|| "管理ファイルの保存先が不正です".to_string())?,
+        )
+        .file_name()
+        .ok_or_else(|| "管理ファイルの保存先が不正です".to_string())?;
+        let path = asset_files_directory(&locations.asset_storage_root, &asset_id)
+            .map_err(|error| error.to_string())?
+            .join(filename);
+        if path.is_file() {
+            let deletion_path = path.with_file_name(format!(".deleting-{file_id}"));
+            fs::rename(&path, &deletion_path).map_err(|error| error.to_string())?;
+            let result =
+                connection.execute("DELETE FROM asset_files WHERE id=?1", params![file_id]);
+            if let Err(error) = result {
+                let _ = fs::rename(&deletion_path, &path);
+                return Err(error.to_string());
+            }
+            fs::remove_file(deletion_path).map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+    }
+    connection
+        .execute("DELETE FROM asset_files WHERE id=?1", params![file_id])
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1177,6 +1342,27 @@ fn validate_storage_path(input: &str, label: &str) -> LibraryResult<PathBuf> {
     Ok(path)
 }
 
+fn validated_asset_id(asset_id: &str) -> LibraryResult<&str> {
+    Uuid::parse_str(asset_id).map_err(|_| LibraryError::Message("アセットIDが不正です".into()))?;
+    Ok(asset_id)
+}
+
+fn asset_directory(asset_storage_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
+    Ok(asset_storage_root
+        .join("assets")
+        .join(validated_asset_id(asset_id)?))
+}
+
+fn asset_files_directory(asset_storage_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
+    Ok(asset_directory(asset_storage_root, asset_id)?.join("files"))
+}
+
+fn cleanup_added_files(destination: &Path, files: &[ImportedFile]) {
+    for file in files {
+        let _ = fs::remove_file(destination.join(&file.stored_filename));
+    }
+}
+
 fn prepare_library(
     root: &Path,
     asset_storage_root: &Path,
@@ -1670,12 +1856,32 @@ fn remove_imported_asset(
     asset_storage_root: &Path,
     asset_id: &str,
 ) -> LibraryResult<()> {
-    let connection = Connection::open(database_path)?;
-    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
-    connection.execute("DELETE FROM assets WHERE id = ?1", params![asset_id])?;
-    let asset_directory = asset_storage_root.join("assets").join(asset_id);
+    let asset_directory = asset_directory(asset_storage_root, asset_id)?;
+    let deletion_directory = asset_storage_root
+        .join("assets")
+        .join(format!(".deleting-{}", Uuid::now_v7()));
     if asset_directory.exists() {
-        fs::remove_dir_all(asset_directory)?;
+        fs::rename(&asset_directory, &deletion_directory)?;
+    }
+
+    let result = (|| -> LibraryResult<()> {
+        let connection = Connection::open(database_path)?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let deleted = connection.execute("DELETE FROM assets WHERE id = ?1", params![asset_id])?;
+        if deleted == 0 {
+            return Err(LibraryError::Message("アセットが見つかりません".into()));
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        if deletion_directory.exists() {
+            let _ = fs::rename(&deletion_directory, &asset_directory);
+        }
+        return Err(error);
+    }
+    if deletion_directory.exists() {
+        fs::remove_dir_all(deletion_directory)?;
     }
     Ok(())
 }
@@ -1803,6 +2009,7 @@ pub fn run() {
             update_asset,
             list_tags,
             create_tag,
+            delete_tag,
             set_asset_tags,
             list_categories,
             create_category,
@@ -1810,6 +2017,9 @@ pub fn run() {
             add_asset_relation,
             remove_asset_relation,
             set_asset_cover,
+            delete_asset,
+            add_asset_files,
+            delete_asset_file,
             get_asset_file_path,
             reveal_asset_file,
             open_external_url,
@@ -1841,6 +2051,11 @@ mod tests {
     #[test]
     fn refuses_an_empty_storage_path() {
         assert!(validate_storage_path("  ", "アセット保存先").is_err());
+    }
+
+    #[test]
+    fn refuses_an_invalid_asset_id_for_storage_paths() {
+        assert!(asset_directory(Path::new("/tmp/assets"), "../outside").is_err());
     }
 
     #[test]

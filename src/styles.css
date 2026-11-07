@@ -142,6 +142,9 @@ textarea { min-height: 104px; resize: vertical; }
 .filter { background: transparent; border: 1px solid transparent; color: var(--color-text); display: block; font-weight: 400; margin: 2px 0; text-align: left; width: 100%; }
 .filter:hover { background: var(--color-accent-subtle); text-decoration: underline; }
 .filter.active { background: var(--color-action); color: var(--color-on-action); font-weight: 700; }
+.tag-filter-row { align-items: center; display: flex; gap: 4px; }
+.tag-filter-row .filter { flex: 1; }
+.tag-filter-row .icon-button { min-width: 32px; }
 .capacity { border-top: 1px solid var(--color-divider); color: var(--color-muted); display: flex; flex-direction: column; font-size: .875rem; gap: 8px; margin-top: 28px; padding-top: 20px; }
 .capacity b { color: var(--color-text); }
 .capacity select { font-size: .8125rem; min-height: 40px; }
