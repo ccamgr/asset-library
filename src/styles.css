@@ -209,7 +209,48 @@ textarea { min-height: 104px; resize: vertical; }
 .relation small { color: var(--color-text); }
 .detail-section select { margin-top: 12px; width: 100%; }
 
+.dialog-backdrop {
+  align-items: center;
+  background: rgb(0 0 0 / 60%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 32px;
+  position: fixed;
+  z-index: 10;
+}
+.dialog {
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  color: var(--color-text);
+  max-height: calc(100vh - 64px);
+  max-width: 720px;
+  overflow: auto;
+  padding: 28px;
+  width: 100%;
+}
+.dialog h2 { border-bottom: 3px solid var(--color-text); padding-bottom: 12px; }
+.dialog-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 18px; }
+.dialog-grid label { font-size: .8125rem; margin: 0; }
+.dialog-grid label input { display: block; margin-top: 6px; width: 100%; }
+.dialog > label { margin-top: 18px; }
+.dialog > label input, .dialog > label textarea { display: block; margin-top: 6px; width: 100%; }
+.file-select { background: var(--color-accent-subtle); border: 1px solid var(--color-accent-border); margin: 20px 0; padding: 16px; }
+.file-select b { display: block; margin-bottom: 10px; }
+.file-select p { margin: 10px 0; }
+.file-select ul { margin: 10px 0 0; max-height: 128px; overflow: auto; padding-left: 24px; }
+.file-select li { overflow-wrap: anywhere; padding: 3px 0; }
+.file-select .icon-button { margin-left: 12px; vertical-align: middle; }
+.dialog .import-labels { border-top: 1px solid var(--color-divider); padding-top: 16px; }
+.dialog-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; }
+.dialog-actions .primary { margin-top: 0; }
+.dialog-progress { margin-top: 20px; }
+.dialog-progress progress { accent-color: var(--color-brand); display: block; height: 14px; margin-top: 8px; width: 100%; }
+
 @media (max-width: 1120px) {
   .app-shell { grid-template-columns: 210px minmax(420px, 1fr); }
   .detail-pane { border-left: 0; border-top: 1px solid var(--color-border); grid-column: 1 / -1; max-height: none; }
+}
+@media (max-width: 640px) {
+  .dialog-grid { grid-template-columns: 1fr; }
 }

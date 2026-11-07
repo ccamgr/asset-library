@@ -98,6 +98,13 @@ struct InitializeLibraryRequest {
 struct ImportRequest {
     title: String,
     source_paths: Vec<String>,
+    creator: Option<String>,
+    source: Option<String>,
+    product_url: Option<String>,
+    shop_url: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    note: Option<String>,
     #[serde(default)]
     tag_ids: Vec<String>,
     #[serde(default)]
@@ -1222,7 +1229,7 @@ fn import_into_library(
         let mut files = Vec::with_capacity(request.source_paths.len());
         let mut total_bytes = 0_u64;
 
-        for source_path in request.source_paths {
+        for source_path in &request.source_paths {
             let source_path = PathBuf::from(source_path);
             let metadata = fs::metadata(&source_path)?;
             if !metadata.is_file() {
@@ -1250,7 +1257,8 @@ fn import_into_library(
         let asset_directory = asset_storage_root.join("assets").join(&asset_id);
         copy_staged_asset(&staging_asset_dir, &asset_directory, &files)?;
 
-        let database_result = insert_imported_asset(&database_path, &asset_id, title, &files);
+        let database_result = insert_imported_asset(&database_path, &asset_id, title, &files)
+            .and_then(|_| apply_import_metadata(&database_path, &asset_id, &request));
         if let Err(error) = database_result {
             let _ = fs::remove_dir_all(&asset_directory);
             return Err(error);
@@ -1268,6 +1276,32 @@ fn import_into_library(
         let _ = fs::remove_dir_all(&staging_asset_dir);
     }
     import_result
+}
+
+fn apply_import_metadata(
+    database_path: &Path,
+    asset_id: &str,
+    request: &ImportRequest,
+) -> LibraryResult<()> {
+    let connection = Connection::open(database_path)?;
+    connection.execute(
+        "UPDATE assets
+         SET creator = ?1, source = ?2, product_url = ?3, shop_url = ?4,
+             description = ?5, version = ?6, note = ?7, updated_at = ?8
+         WHERE id = ?9",
+        params![
+            request.creator,
+            request.source,
+            request.product_url,
+            request.shop_url,
+            request.description,
+            request.version,
+            request.note,
+            unix_timestamp(),
+            asset_id,
+        ],
+    )?;
+    Ok(())
 }
 
 fn import_legacy_archive(
@@ -1830,6 +1864,13 @@ mod tests {
                     display_path(&source.join("main.zip")),
                     display_path(&source.join("readme.txt")),
                 ],
+                creator: None,
+                source: None,
+                product_url: None,
+                shop_url: None,
+                description: None,
+                version: None,
+                note: None,
                 tag_ids: vec![],
                 category_ids: vec![],
             },
@@ -1946,6 +1987,13 @@ mod tests {
             ImportRequest {
                 title: "Backup test".into(),
                 source_paths: vec![display_path(&source)],
+                creator: None,
+                source: None,
+                product_url: None,
+                shop_url: None,
+                description: None,
+                version: None,
+                note: None,
                 tag_ids: vec![],
                 category_ids: vec![],
             },

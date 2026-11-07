@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
+    allowedHosts: ["pve-dev.cow-agama.ts.net"],
     port: 1420,
     strictPort: true,
   },
