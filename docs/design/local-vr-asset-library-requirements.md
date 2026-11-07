@@ -32,7 +32,7 @@ BOOTH、Gumroad などから入手した VRChat 用アセットを、**ダウン
 - ZIP、7z、RAR、UnityPackage、各種圧縮ファイル、フォルダを扱える（内容の展開は後続機能でもよい）。
 - **一つのアセットに複数の配布ファイルを紐付けられる。** 例: 本体 ZIP、追加テクスチャ、更新版、導入説明 PDF、購入時に分割されていた複数 ZIP。詳細画面では各ファイルを個別に開く／格納場所を開く／外すことができる。
 - 複数ファイルをまとめて新規アセットへ登録するほか、既存アセットへ後からファイルを追加できる。同一商品の旧版・新版を残すか、旧版を置換扱いにするかを選べる。
-- 登録時に名前、配布元、商品 URL、ショップ URL、作者名、バージョン、入手日、価格／無料、メモを編集できる。
+- 登録時に名前、配布元、商品 URL、作者名、バージョン、入手日、価格／無料、メモを編集できる。
 - 複数ファイルを一括登録でき、共通タグ・カテゴリをまとめて付与できる。
 - 同じファイル名・ハッシュ・商品 URL が存在する場合、重複候補として提示する。
 
@@ -100,7 +100,7 @@ VRAssetLibrary/                       # ユーザーがバックアップする�
 
 | エンティティ | 主な項目 | 補足 |
 | --- | --- | --- |
-| Asset | id, title, creator, source, product_url, shop_url, description, acquired_at, version, price, note, cover_path | ライブラリ上の一件 |
+| Asset | id, title, creator, source, product_url, description, acquired_at, version, price, note, cover_path | ライブラリ上の一件 |
 | AssetFile | id, asset_id, storage_mode, relative_path / external_path, filename, size, hash, added_at | 一件に複数ファイルを紐付ける |
 | Tag | id, name, color | 重複しないタグ辞書 |
 | AssetTag | asset_id, tag_id | 多対多 |

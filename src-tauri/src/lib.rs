@@ -101,8 +101,6 @@ struct ImportRequest {
     creator: Option<String>,
     source: Option<String>,
     product_url: Option<String>,
-    shop_url: Option<String>,
-    description: Option<String>,
     version: Option<String>,
     note: Option<String>,
     #[serde(default)]
@@ -177,6 +175,7 @@ struct AssetSummary {
     search_text: String,
     cover_data_url: Option<String>,
     tags: Vec<Tag>,
+    categories: Vec<Category>,
 }
 
 #[derive(Debug, Serialize)]
@@ -206,8 +205,6 @@ struct AssetDetail {
     creator: Option<String>,
     source: Option<String>,
     product_url: Option<String>,
-    shop_url: Option<String>,
-    description: Option<String>,
     version: Option<String>,
     note: Option<String>,
     cover_data_url: Option<String>,
@@ -225,8 +222,6 @@ struct AssetUpdateRequest {
     creator: Option<String>,
     source: Option<String>,
     product_url: Option<String>,
-    shop_url: Option<String>,
-    description: Option<String>,
     version: Option<String>,
     note: Option<String>,
 }
@@ -250,6 +245,13 @@ struct AssetFilesRequest {
 struct NamedEntityRequest {
     name: String,
     color: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameTagRequest {
+    id: String,
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -496,10 +498,10 @@ fn list_assets(
         .prepare(
             "SELECT id, title, creator, cover_path,
                     title || ' ' || COALESCE(creator, '') || ' ' || COALESCE(source, '') || ' ' ||
-                    COALESCE(product_url, '') || ' ' || COALESCE(shop_url, '') || ' ' ||
-                    COALESCE(description, '') || ' ' || COALESCE(version, '') || ' ' || COALESCE(note, '')
+                    COALESCE(product_url, '') || ' ' ||
+                    COALESCE(version, '') || ' ' || COALESCE(note, '')
              FROM assets
-             WHERE title LIKE ?1 OR COALESCE(creator, '') LIKE ?1 OR COALESCE(description, '') LIKE ?1 OR COALESCE(note, '') LIKE ?1
+             WHERE title LIKE ?1 OR COALESCE(creator, '') LIKE ?1 OR COALESCE(note, '') LIKE ?1
              ORDER BY updated_at DESC, title COLLATE NOCASE",
         )
         .map_err(|error| error.to_string())?;
@@ -520,6 +522,8 @@ fn list_assets(
         let (id, title, creator, cover_path, search_text) =
             row.map_err(|error| error.to_string())?;
         let tags = tags_for_asset(&connection, &id).map_err(|error| error.to_string())?;
+        let categories =
+            categories_for_asset(&connection, &id).map_err(|error| error.to_string())?;
         assets.push(AssetSummary {
             id,
             title,
@@ -528,6 +532,7 @@ fn list_assets(
             cover_data_url: cover_path
                 .and_then(|path| cover_data_url(&locations.asset_storage_root, &path)),
             tags,
+            categories,
         });
     }
     Ok(assets)
@@ -560,16 +565,14 @@ fn update_asset(
         .map_err(|error| error.to_string())?;
     connection
         .execute(
-            "UPDATE assets SET title=?2, creator=?3, source=?4, product_url=?5, shop_url=?6,
-             description=?7, version=?8, note=?9, updated_at=?10 WHERE id=?1",
+            "UPDATE assets SET title=?2, creator=?3, source=?4, product_url=?5,
+             version=?6, note=?7, updated_at=?8 WHERE id=?1",
             params![
                 request.id,
                 request.title.trim(),
                 optional_text(request.creator),
                 optional_text(request.source),
                 optional_text(request.product_url),
-                optional_text(request.shop_url),
-                optional_text(request.description),
                 optional_text(request.version),
                 optional_text(request.note),
                 unix_timestamp(),
@@ -630,6 +633,46 @@ fn delete_tag(app: AppHandle, state: State<'_, AppState>, tag_id: String) -> Res
     connection
         .execute("DELETE FROM tags WHERE id=?1", params![tag_id])
         .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_category(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    category_id: String,
+) -> Result<(), String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute("DELETE FROM categories WHERE id=?1", params![category_id])
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_tag(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: RenameTagRequest,
+) -> Result<(), String> {
+    let name = non_empty_name(&request.name).map_err(|error| error.to_string())?;
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
+        .map_err(|error| error.to_string())?;
+    let changed = connection
+        .execute(
+            "UPDATE tags SET name=?1 WHERE id=?2",
+            params![name, request.id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("タグが見つかりません".into());
+    }
     Ok(())
 }
 
@@ -845,6 +888,9 @@ fn set_asset_categories(
     state: State<'_, AppState>,
     request: AssetAssignmentRequest,
 ) -> Result<(), String> {
+    if request.ids.len() > 1 {
+        return Err("カテゴリはアセットごとに1つだけ設定できます".into());
+    }
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
     let mut connection = Connection::open(locations.library_root.join(DATABASE_FILE))
         .map_err(|error| error.to_string())?;
@@ -1175,15 +1221,28 @@ fn all_categories(connection: &Connection) -> LibraryResult<Vec<Category>> {
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+fn categories_for_asset(connection: &Connection, asset_id: &str) -> LibraryResult<Vec<Category>> {
+    let mut statement = connection.prepare("SELECT c.id, c.parent_id, c.name, c.sort_order FROM categories c JOIN asset_categories ac ON ac.category_id=c.id WHERE ac.asset_id=?1 ORDER BY c.sort_order, c.name COLLATE NOCASE")?;
+    let rows = statement.query_map(params![asset_id], |row| {
+        Ok(Category {
+            id: row.get(0)?,
+            parent_id: row.get(1)?,
+            name: row.get(2)?,
+            sort_order: row.get(3)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
 fn asset_detail(
     connection: &Connection,
     asset_root: &Path,
     asset_id: &str,
 ) -> LibraryResult<AssetDetail> {
-    let (id, title, creator, source, product_url, shop_url, description, version, note, cover_path): (String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = connection.query_row(
-        "SELECT id, title, creator, source, product_url, shop_url, description, version, note, cover_path FROM assets WHERE id=?1",
+    let (id, title, creator, source, product_url, version, note, cover_path): (String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = connection.query_row(
+        "SELECT id, title, creator, source, product_url, version, note, cover_path FROM assets WHERE id=?1",
         params![asset_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
     )?;
     let mut file_statement = connection.prepare("SELECT id, original_filename, byte_size, storage_mode FROM asset_files WHERE asset_id=?1 ORDER BY created_at")?;
     let files = file_statement
@@ -1229,8 +1288,6 @@ fn asset_detail(
         creator,
         source,
         product_url,
-        shop_url,
-        description,
         version,
         note,
         cover_data_url: cover_path.and_then(|path| cover_data_url(asset_root, &path)),
@@ -1472,15 +1529,13 @@ fn apply_import_metadata(
     let connection = Connection::open(database_path)?;
     connection.execute(
         "UPDATE assets
-         SET creator = ?1, source = ?2, product_url = ?3, shop_url = ?4,
-             description = ?5, version = ?6, note = ?7, updated_at = ?8
-         WHERE id = ?9",
+         SET creator = ?1, source = ?2, product_url = ?3,
+             version = ?4, note = ?5, updated_at = ?6
+         WHERE id = ?7",
         params![
             request.creator,
             request.source,
             request.product_url,
-            request.shop_url,
-            request.description,
             request.version,
             request.note,
             unix_timestamp(),
@@ -1902,8 +1957,6 @@ fn migrate(connection: &Connection) -> LibraryResult<()> {
           creator TEXT,
           source TEXT,
           product_url TEXT,
-          shop_url TEXT,
-          description TEXT,
           version TEXT,
           acquired_at INTEGER,
           note TEXT,
@@ -1965,8 +2018,35 @@ fn migrate(connection: &Connection) -> LibraryResult<()> {
         ",
     )?;
 
+    let has_shop_url = connection
+        .prepare("PRAGMA table_info(assets)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|column| column == "shop_url");
+    if has_shop_url {
+        connection.execute(
+            "UPDATE assets SET product_url = COALESCE(NULLIF(product_url, ''), shop_url)",
+            [],
+        )?;
+        connection.execute_batch("ALTER TABLE assets DROP COLUMN shop_url;")?;
+    }
+    let has_description = connection
+        .prepare("PRAGMA table_info(assets)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|column| column == "description");
+    if has_description {
+        connection.execute(
+            "UPDATE assets SET note = COALESCE(NULLIF(note, ''), description)",
+            [],
+        )?;
+        connection.execute_batch("ALTER TABLE assets DROP COLUMN description;")?;
+    }
+
     connection.execute(
-        "INSERT OR IGNORE INTO app_metadata (key, value) VALUES ('schema_version', '1')",
+        "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('schema_version', '2')",
         [],
     )?;
     Ok(())
@@ -2010,9 +2090,11 @@ pub fn run() {
             list_tags,
             create_tag,
             delete_tag,
+            rename_tag,
             set_asset_tags,
             list_categories,
             create_category,
+            delete_category,
             set_asset_categories,
             add_asset_relation,
             remove_asset_relation,
@@ -2059,6 +2141,32 @@ mod tests {
     }
 
     #[test]
+    fn migrates_shop_url_into_the_single_product_url() {
+        let database =
+            std::env::temp_dir().join(format!("vr-asset-library-url-{}.db", Uuid::now_v7()));
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE assets (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, creator TEXT, source TEXT, product_url TEXT, shop_url TEXT, description TEXT, version TEXT, acquired_at INTEGER, note TEXT, cover_path TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); INSERT INTO assets (id, title, shop_url, created_at, updated_at) VALUES ('asset-1', 'Legacy', 'https://booth.pm/ja/items/1', 0, 0);").unwrap();
+        migrate(&connection).unwrap();
+        let url: Option<String> = connection
+            .query_row(
+                "SELECT product_url FROM assets WHERE id='asset-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(url.as_deref(), Some("https://booth.pm/ja/items/1"));
+        let columns = connection
+            .prepare("PRAGMA table_info(assets)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!columns.iter().any(|column| column == "shop_url"));
+        fs::remove_file(database).unwrap();
+    }
+
+    #[test]
     fn imports_multiple_files_into_an_asset_directory() {
         let root = std::env::temp_dir().join(format!("vr-asset-library-import-{}", Uuid::now_v7()));
         let source = root.join("source");
@@ -2082,8 +2190,6 @@ mod tests {
                 creator: None,
                 source: None,
                 product_url: None,
-                shop_url: None,
-                description: None,
                 version: None,
                 note: None,
                 tag_ids: vec![],
@@ -2205,8 +2311,6 @@ mod tests {
                 creator: None,
                 source: None,
                 product_url: None,
-                shop_url: None,
-                description: None,
                 version: None,
                 note: None,
                 tag_ids: vec![],
