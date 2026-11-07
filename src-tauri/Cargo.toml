@@ -1,0 +1,23 @@
+[package]
+name = "vr-asset-library"
+version = "0.1.0"
+description = "A local-first VR asset library"
+authors = ["VR Asset Library contributors"]
+edition = "2021"
+
+[lib]
+name = "vr_asset_library_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+rusqlite = { version = "0.38", features = ["backup", "bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+thiserror = "2"
+uuid = { version = "1", features = ["v7"] }

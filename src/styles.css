@@ -1,0 +1,76 @@
+:root { color: #f8f7ff; background: #14131a; font-family: Inter, "Noto Sans JP", system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 620px; min-height: 100vh; background: radial-gradient(circle at 15% 0%, #30284c, transparent 38%), #14131a; }
+button, input { font: inherit; }
+button { border: 0; border-radius: 9px; cursor: pointer; font-weight: 700; padding: 0.7rem 1rem; }
+.shell { margin: 0 auto; max-width: 900px; padding: 10vh 3rem; }
+.setup { max-width: 760px; }
+.header-row { align-items: flex-start; display: flex; gap: 1rem; justify-content: space-between; }
+.eyebrow { color: #bba5ff; font-size: 0.76rem; font-weight: 800; letter-spacing: 0.15em; margin: 0 0 0.75rem; }
+h1 { font-size: 2.2rem; letter-spacing: -0.04em; margin: 0; }
+.intro, .muted, .hint { color: #bbb7c8; line-height: 1.6; }
+.small { font-size: 0.8rem; margin-top: -0.7rem; }
+.card { background: #211f2a; border: 1px solid #393545; border-radius: 16px; margin-top: 2.5rem; padding: 1.5rem; }
+label { display: block; font-weight: 700; margin-bottom: 0.6rem; }
+.card label:not(:first-child) { margin-top: 1.4rem; }
+.path-picker { display: flex; gap: 0.6rem; }
+input { background: #16151c; border: 1px solid #494454; border-radius: 9px; color: inherit; flex: 1; min-width: 0; padding: 0.72rem; }
+.primary { background: #a882ff; color: #17111f; margin-top: 1rem; }
+.primary:disabled { cursor: wait; opacity: 0.6; }
+.secondary { background: #3a3545; color: #f8f7ff; }
+.hint { font-size: 0.86rem; margin: 0.7rem 0 0; }
+.error { background: #542c3d; border-radius: 8px; color: #ffd9e5; margin: 1rem 0 0; padding: 0.7rem; }
+.success { background: #1c493e; border-radius: 8px; color: #cbffef; margin: 1rem 0 0; padding: 0.7rem; }
+.loading { align-items: center; display: grid; min-height: 100vh; place-items: center; }
+.import-card h2 { font-size: 1.2rem; margin-top: 0; }
+.file-list { color: #cfccda; margin: 1rem 0; max-height: 8rem; overflow: auto; padding-left: 1.25rem; }
+.file-list li + li { margin-top: 0.25rem; }
+.actions { display: flex; gap: 0.6rem; justify-content: flex-end; }
+.empty-state { align-items: center; background: rgba(33,31,42,.8); border: 1px dashed #514b60; border-radius: 20px; display: flex; flex-direction: column; margin-top: 2.5rem; padding: 5rem 2rem; text-align: center; }
+.asset-icon { color: #bba5ff; font-size: 3rem; }
+.empty-state h2 { margin-bottom: 0.25rem; }
+.empty-state p, .empty-state small { color: #bbb7c8; }
+.app-shell { display: grid; grid-template-columns: 190px minmax(360px, 1fr) 380px; min-height: 100vh; }
+.sidebar, .detail-pane { background: #1b1922; border-color: #363140; border-style: solid; padding: 1.25rem; }
+.sidebar { border-width: 0 1px 0 0; }
+.detail-pane { border-width: 0 0 0 1px; max-height: 100vh; overflow: auto; }
+.library-pane { min-width: 0; padding: 1.5rem; }
+.library-header, .detail-head, .side-title { align-items: center; display: flex; justify-content: space-between; gap: .75rem; }
+.library-header h1 { font-size: 1.6rem; }
+.search { flex: 0 1 260px; }
+.full { width: 100%; }
+.side-section { margin-top: 2rem; }
+.side-title { font-size: .85rem; margin-bottom: .5rem; }
+.icon-button { background: transparent; color: #c4b5fd; font-size: 1.2rem; line-height: 1; padding: .25rem .4rem; }
+.filter { background: transparent; color: #cbc6d7; display: block; font-weight: 500; padding: .45rem .4rem; text-align: left; width: 100%; }
+.filter.active { background: #352c52; color: #e8e0ff; }
+.capacity { color: #bbb7c8; display: flex; flex-direction: column; font-size: .8rem; gap: .35rem; margin-top: 2rem; }
+.capacity b { color: #f8f7ff; }
+.compact { font-size: .78rem; margin-top: .35rem; padding: .45rem .6rem; }
+.asset-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); margin-top: 1.25rem; }
+.asset-card { background: #24212d; color: #f8f7ff; display: flex; flex-direction: column; gap: .35rem; min-height: 220px; padding: .55rem; text-align: left; }
+.asset-card.selected { box-shadow: 0 0 0 2px #a882ff; }
+.asset-card small { color: #bcb6ca; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cover { align-items: center; background: #17151e; border-radius: 6px; color: #a882ff; display: flex; font-size: 2.2rem; height: 128px; justify-content: center; overflow: hidden; }
+.cover img, .cover-editor img { height: 100%; object-fit: cover; width: 100%; }
+.chip-row { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: auto; }
+.chip { background: #393249; border-radius: 999px; color: #dcd2f4; font-size: .68rem; padding: .15rem .4rem; }
+.import-bar { align-items: center; background: #282334; border-radius: 10px; display: flex; gap: .5rem; margin-top: 1rem; padding: .65rem; }
+.import-bar input { min-width: 140px; }
+.import-bar span { color: #c6c0d0; font-size: .8rem; white-space: nowrap; }
+.detail-empty { color: #bbb7c8; padding: 3rem 1rem; text-align: center; }
+.detail-pane label { font-size: .8rem; margin-top: 1rem; }
+.detail-pane label input, .detail-pane label textarea { display: block; margin-top: .35rem; width: 100%; }
+textarea, select { background: #16151c; border: 1px solid #494454; border-radius: 8px; color: #f8f7ff; font: inherit; padding: .6rem; width: 100%; }
+textarea { min-height: 76px; resize: vertical; }
+.cover-editor { background: #282334; color: #cfc4e9; height: 185px; margin: .25rem 0 .6rem; overflow: hidden; padding: 0; width: 100%; }
+.detail-section { border-top: 1px solid #363140; margin-top: 1.25rem; padding-top: 1rem; }
+.check { color: #d8d2e4; font-size: .82rem; font-weight: 500; margin: .4rem 0; }
+.check input { accent-color: #a882ff; margin-right: .45rem; width: auto; }
+.file-row { align-items: center; display: flex; gap: .5rem; justify-content: space-between; margin-top: .5rem; }
+.file-row span { font-size: .78rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.file-row small { color: #aaa2b8; display: block; }
+.relation { background: #302a3d; color: #e0d9ed; display: flex; font-size: .8rem; justify-content: space-between; margin-top: .45rem; padding: .5rem; width: 100%; }
+.relation small { color: #b7a6e0; }
+.detail-section select { margin-top: .5rem; }
+@media (max-width: 920px) { .app-shell { grid-template-columns: 160px minmax(340px, 1fr); } .detail-pane { grid-column: 1 / -1; max-height: none; } }
