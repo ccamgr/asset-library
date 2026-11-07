@@ -1322,9 +1322,6 @@ fn import_legacy_archive(
         .filter(|name| name.starts_with(&product_prefix))
         .cloned()
         .collect::<Vec<_>>();
-    if product_entries.is_empty() {
-        return Err(LibraryError::Message("商品ディレクトリが空です".into()));
-    }
     if product_entries.iter().any(|name| !safe_archive_entry(name)) {
         return Err(LibraryError::Message(
             "ZIP内に安全でないパスが含まれています".into(),
@@ -1340,7 +1337,12 @@ fn import_legacy_archive(
         let original_filename = format!("{title}.zip");
         let stored_filename = format!("{file_id}-{original_filename}");
         let staged_zip = staging_files_dir.join(&stored_filename);
-        let byte_size = write_product_archive(&mut archive, &product_entries, &staged_zip)?;
+        let byte_size = write_product_archive(
+            &mut archive,
+            &product_entries,
+            &product_directory,
+            &staged_zip,
+        )?;
         fs::write(staging_asset_dir.join("cover.jpg"), thumbnail)?;
 
         let files = vec![ImportedFile {
@@ -1418,11 +1420,17 @@ fn read_zip_entry<R: Read + std::io::Seek>(
 fn write_product_archive<R: Read + std::io::Seek>(
     archive: &mut ZipArchive<R>,
     entries: &[String],
+    product_directory: &str,
     destination: &Path,
 ) -> LibraryResult<u64> {
     let output = File::create(destination)?;
     let mut writer = ZipWriter::new(BufWriter::new(output));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    if entries.is_empty() {
+        writer
+            .add_directory(format!("{product_directory}/"), options)
+            .map_err(|error| LibraryError::Message(format!("ZIPを作成できません: {error}")))?;
+    }
     for name in entries {
         let mut entry = archive.by_name(name).map_err(|error| {
             LibraryError::Message(format!("ZIP内の {name} を読めません: {error}"))
@@ -1862,7 +1870,7 @@ mod tests {
                 SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
             writer.start_file("_assetinfo.md", options).unwrap();
             writer
-                .write_all("https://booth.pm/ja/items/123\n対応アバター: Example\n".as_bytes())
+                .write_all("https://booth.pm/ja/items/123".as_bytes())
                 .unwrap();
             writer.start_file("_thumbnail.jpg", options).unwrap();
             writer.write_all(b"not-a-real-jpeg").unwrap();
@@ -1888,11 +1896,11 @@ mod tests {
             .query_row(
                 "SELECT product_url, note FROM assets WHERE id = ?1",
                 params![result.asset_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .unwrap();
         assert_eq!(detail.0, "https://booth.pm/ja/items/123");
-        assert_eq!(detail.1, "対応アバター: Example");
+        assert_eq!(detail.1, None);
         let stored = fs::read_dir(
             asset_storage
                 .join("assets")
@@ -1909,6 +1917,17 @@ mod tests {
             .file_names()
             .any(|name| name == "Product/readme.txt"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn keeps_legacy_asset_info_lines_after_the_url_as_a_note() {
+        assert_eq!(
+            parse_legacy_asset_info("https://booth.pm/ja/items/123\n対応アバター: Example\n"),
+            (
+                Some("https://booth.pm/ja/items/123".into()),
+                Some("対応アバター: Example".into())
+            )
+        );
     }
 
     #[test]
