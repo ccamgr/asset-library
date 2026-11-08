@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { invoke } from "./api";
+import { confirmDialog } from "./confirm-dialog";
 
 type Capacity = { assetBytes: number; databaseBackupBytes: number };
 type Backup = { path: string; name: string; byteSize: number };
@@ -78,7 +79,19 @@ export function useSettingsPanel({ enabled, onOpenLegacyImport }: SettingsPanelO
       legacyImport.textContent = "旧形式ZIPを一括取込";
       migration.append(legacyImport);
 
-      panel.append(header, storage, backup, migration);
+      const display = document.createElement("section");
+      display.className = "settings-section";
+      display.innerHTML = "<h2>表示項目</h2><p>通常は省略する詳細項目を、アセット追加・詳細画面で表示します。</p>";
+      const optionalLabel = document.createElement("label");
+      optionalLabel.className = "check";
+      const optionalFields = document.createElement("input");
+      optionalFields.type = "checkbox";
+      optionalFields.checked = localStorage.getItem("asset-library.show-optional-fields") === "true";
+      optionalLabel.append(optionalFields, document.createTextNode("配布元・バージョンを表示"));
+      optionalFields.addEventListener("change", () => localStorage.setItem("asset-library.show-optional-fields", String(optionalFields.checked)));
+      display.append(optionalLabel);
+
+      panel.append(header, storage, backup, migration, display);
       screen.append(panel);
       document.body.append(screen);
 
@@ -113,7 +126,7 @@ export function useSettingsPanel({ enabled, onOpenLegacyImport }: SettingsPanelO
         finally { createBackup.disabled = false; }
       });
       restore.addEventListener("click", async () => {
-        if (!backupSelect.value || !window.confirm("現在のライブDBを選択したバックアップで復元します。続けますか？")) return;
+        if (!backupSelect.value || !await confirmDialog("DBを復元", "現在のライブDBを選択したバックアップで復元します。続けますか？", "復元")) return;
         restore.disabled = true;
         try { await invoke("restore_database_backup", { backupPath: backupSelect.value }); backupMessage.textContent = "復元しました"; await refresh(); }
         catch (reason) { backupMessage.textContent = String(reason); }

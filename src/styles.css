@@ -131,7 +131,11 @@ textarea { min-height: 104px; resize: vertical; }
 }
 .sidebar, .detail-pane { background: var(--color-surface); }
 .sidebar { border-right: 1px solid var(--color-border); border-top: 6px solid var(--color-brand); display: flex; flex-direction: column; padding: 28px 20px; }
-.detail-pane { border-left: 1px solid var(--color-border); max-height: 100vh; overflow: auto; padding: 28px 24px; }
+.detail-pane { border-left: 1px solid var(--color-border); display: flex; flex-direction: column; max-height: 100vh; overflow: auto; padding: 28px 24px; }
+.detail-pane > .detail-section:nth-of-type(1) { order: 2; }
+.detail-pane > .detail-section:nth-of-type(2) { order: 1; }
+.detail-pane > .detail-section:nth-of-type(3) { order: 3; }
+.detail-pane > .detail-section:nth-of-type(4) { order: 4; }
 .library-pane { min-width: 0; padding: 28px 32px 48px; }
 .library-header, .detail-head, .side-title { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .library-header { border-bottom: 3px solid var(--color-text); padding-bottom: 20px; }
@@ -253,6 +257,7 @@ textarea { min-height: 104px; resize: vertical; }
 .dialog-grid label { font-size: .8125rem; margin: 0; }
 .dialog-grid label:first-child { grid-column: 1 / -1; }
 .dialog-grid label:nth-child(3), .dialog-grid label:nth-child(4), .dialog-grid label:last-child { display: none; }
+.dialog-grid label:nth-child(3) { display: block; }
 .dialog-grid label input { display: block; margin-top: 6px; width: 100%; }
 .dialog > label { margin-top: 18px; }
 .dialog-grid + label { display: none; }
