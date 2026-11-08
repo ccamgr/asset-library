@@ -226,8 +226,7 @@ textarea { min-height: 104px; resize: vertical; }
 .relation:hover { background: var(--color-accent-subtle); text-decoration: none; }
 .relation small { color: var(--color-text); }
 .detail-section select { margin-top: 12px; width: 100%; }
-.detail-pane > .secondary.compact { margin-right: 8px; margin-top: 16px; }
-.detail-pane > .secondary.compact:first-of-type::before { content: "🗑"; margin-right: 6px; }
+.detail-pane > .secondary.compact { align-self: flex-end; margin-top: auto; order: 5; }
 
 .dialog-backdrop {
   align-items: center;

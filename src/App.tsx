@@ -147,7 +147,7 @@ function App() {
   const chooseFiles = async () => {
     const result = await open({
       multiple: true,
-      title: "アセットファイルを選択",
+      title: "ファイルを選択",
     });
     const paths = Array.isArray(result) ? result : result ? [result] : [];
     if (paths.length) {
@@ -334,7 +334,7 @@ function App() {
       !selectedBackup ||
       !(await confirmDialog(
         "DBを復元",
-        "現在のライブDBを選択したバックアップで復元します。続けますか？",
+        "現在のDBを選択したバックアップで復元します。続けますか？",
         "復元",
       ))
     )
@@ -501,7 +501,7 @@ function App() {
         <p className="eyebrow">ASSETLIBRARY</p>
         <h1>保存先を決めましょう</h1>
         <p className="intro">
-          ライブDBとキャッシュはアプリデータフォルダに保存されます。
+          DBとキャッシュはアプリデータフォルダに保存されます。
         </p>
         <section className="card">
           <label>アセット保存先</label>
@@ -837,7 +837,7 @@ function App() {
                   await refresh();
                 }}
               >
-                アセットを削除
+                🗑 アセットを削除
               </button>
             </>
           )}
