@@ -3,7 +3,10 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -42,6 +45,7 @@ struct AppSettings {
 struct AppState {
     config_path: PathBuf,
     settings: Mutex<AppSettings>,
+    legacy_import_running: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -61,6 +65,7 @@ impl AppState {
         Ok(Self {
             config_path,
             settings: Mutex::new(settings),
+            legacy_import_running: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -109,7 +114,7 @@ struct ImportRequest {
     category_ids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ImportResult {
     asset_id: String,
@@ -128,18 +133,35 @@ struct LegacyDirectoryImportRequest {
     category_ids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyBatchImportRequest {
+    directory_paths: Vec<String>,
+    #[serde(default)]
+    tag_ids: Vec<String>,
+    #[serde(default)]
+    category_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct LegacyImportFailure {
     source_filename: String,
     reason: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct LegacyDirectoryImportResult {
     imported: Vec<ImportResult>,
     failures: Vec<LegacyImportFailure>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LegacyImportComplete {
+    result: Option<LegacyDirectoryImportResult>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -427,6 +449,94 @@ fn import_legacy_directory(
             .unwrap_or("(名前を取得できないZIP)")
             .to_owned();
         match import_legacy_archive(&locations, &archive) {
+            Ok(result) => {
+                if let Err(error) = assign_import_labels(
+                    &locations.library_root.join(DATABASE_FILE),
+                    &result.asset_id,
+                    &request.tag_ids,
+                    &request.category_ids,
+                ) {
+                    let _ = remove_imported_asset(
+                        &locations.library_root.join(DATABASE_FILE),
+                        &locations.asset_storage_root,
+                        &result.asset_id,
+                    );
+                    failures.push(LegacyImportFailure {
+                        source_filename,
+                        reason: format!("ラベルの設定に失敗しました: {error}"),
+                    });
+                } else {
+                    imported.push(result);
+                }
+            }
+            Err(error) => failures.push(LegacyImportFailure {
+                source_filename,
+                reason: error.to_string(),
+            }),
+        }
+        let _ = app.emit(
+            "legacy-import-progress",
+            LegacyImportProgress {
+                completed: index + 1,
+                total,
+            },
+        );
+    }
+    Ok(LegacyDirectoryImportResult { imported, failures })
+}
+
+#[tauri::command]
+fn start_legacy_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: LegacyBatchImportRequest,
+) -> Result<(), String> {
+    if request.directory_paths.is_empty() {
+        return Err("取り込み元フォルダを指定してください".into());
+    }
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let running = Arc::clone(&state.legacy_import_running);
+    if running.swap(true, Ordering::AcqRel) {
+        return Err("旧形式ZIPの取り込みはすでに実行中です".into());
+    }
+
+    std::thread::spawn(move || {
+        let result = import_legacy_batch(&app, &locations, request);
+        let complete = match result {
+            Ok(result) => LegacyImportComplete {
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => LegacyImportComplete {
+                result: None,
+                error: Some(error.to_string()),
+            },
+        };
+        running.store(false, Ordering::Release);
+        let _ = app.emit("legacy-import-complete", complete);
+    });
+    Ok(())
+}
+
+fn import_legacy_batch(
+    app: &AppHandle,
+    locations: &StorageLocations,
+    request: LegacyBatchImportRequest,
+) -> LibraryResult<LegacyDirectoryImportResult> {
+    let mut archives = Vec::new();
+    for directory_path in request.directory_paths {
+        archives.extend(legacy_archives(Path::new(directory_path.trim()))?);
+    }
+    let total = archives.len();
+    let mut imported = Vec::new();
+    let mut failures = Vec::new();
+    for (index, archive) in archives.into_iter().enumerate() {
+        let source_filename = archive
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("(名前を取得できないZIP)")
+            .to_owned();
+        match import_legacy_archive(locations, &archive) {
             Ok(result) => {
                 if let Err(error) = assign_import_labels(
                     &locations.library_root.join(DATABASE_FILE),
@@ -2084,6 +2194,7 @@ pub fn run() {
             import_files,
             count_legacy_archives,
             import_legacy_directory,
+            start_legacy_import,
             list_assets,
             get_asset_detail,
             update_asset,

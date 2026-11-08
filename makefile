@@ -31,3 +31,9 @@ check:  # run formatting checks and all tests
 .PHONY: fmt
 fmt:  # format Rust sources
 	@cd src-tauri && cargo fmt --all
+
+.PHONY: gen-icons
+gen-icons:  # generate desktop icons from src-tauri/icons/app.svg
+	@npm run tauri -- icon src-tauri/icons/app.svg
+	@rm -rf src-tauri/icons/android src-tauri/icons/ios
+	@rm -f src-tauri/icons/Square*.png src-tauri/icons/StoreLogo.png

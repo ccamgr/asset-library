@@ -4,6 +4,9 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 type AnyRecord = Record<string, any>;
 const browserPreview =
   typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
+const eventHandlers = new Map<string, Set<(event: { payload: any }) => void>>();
+const emitMock = (event: string, payload: any) =>
+  eventHandlers.get(event)?.forEach((handler) => handler({ payload }));
 let nextId = 3;
 const tags = [
   { id: "tag-clothes", name: "衣装", color: null },
@@ -210,6 +213,25 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
       return 3 as T;
     case "import_legacy_directory":
       return { imported: [], failures: [] } as T;
+    case "start_legacy_import": {
+      const directories = data.directoryPaths ?? [];
+      const total = Math.max(directories.length * 3, 1);
+      for (let completed = 1; completed <= total; completed += 1) {
+        window.setTimeout(
+          () => emitMock("legacy-import-progress", { completed, total }),
+          completed * 250,
+        );
+      }
+      window.setTimeout(
+        () =>
+          emitMock("legacy-import-complete", {
+            result: { imported: [], failures: [] },
+            error: null,
+          }),
+        (total + 1) * 250,
+      );
+      return undefined as T;
+    }
     case "create_database_backup":
       return { path: "ブラウザプレビュー/mock-backup.db" } as T;
     default:
@@ -222,5 +244,10 @@ export const invoke = <T>(command: string, args?: AnyRecord) =>
 export const listen = <T>(
   event: string,
   handler: (event: { payload: T }) => void,
-) =>
-  browserPreview ? Promise.resolve(() => {}) : tauriListen<T>(event, handler);
+) => {
+  if (!browserPreview) return tauriListen<T>(event, handler);
+  const handlers = eventHandlers.get(event) ?? new Set();
+  handlers.add(handler);
+  eventHandlers.set(event, handlers);
+  return Promise.resolve(() => handlers.delete(handler));
+};

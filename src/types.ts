@@ -49,3 +49,7 @@ export type LegacyImportResult = {
   failures: { sourceFilename: string; reason: string }[];
 };
 export type LegacyImportProgress = { completed: number; total: number };
+export type LegacyImportComplete = {
+  result: LegacyImportResult | null;
+  error: string | null;
+};

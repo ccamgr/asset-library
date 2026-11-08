@@ -1,12 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { open } from "../lib/dialog";
-import { invoke, listen } from "../lib/api";
-import type {
-  Category,
-  LegacyImportProgress,
-  LegacyImportResult,
-  Tag,
-} from "../types";
+import { invoke } from "../lib/api";
+import type { Category, Tag } from "../types";
 import { confirmDialog } from "../lib/confirm-dialog";
 import { AssetLabels } from "./AssetLabels";
 
@@ -14,35 +9,20 @@ type Props = {
   tags: Tag[];
   categories: Category[];
   onClose: () => void;
-  onDone: (text: string) => Promise<void>;
+  onStarted: (total: number) => void;
 };
 
 export function LegacyImportDialog({
   tags,
   categories,
   onClose,
-  onDone,
+  onStarted,
 }: Props) {
   const [folders, setFolders] = useState<string[]>([]);
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<LegacyImportProgress | null>(null);
-  const progressOffset = useRef(0);
-  const progressTotal = useRef(0);
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listen<LegacyImportProgress>("legacy-import-progress", (event) =>
-      setProgress({
-        completed: progressOffset.current + event.payload.completed,
-        total: progressTotal.current,
-      }),
-    ).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, []);
   const choose = async () => {
     const result = await open({
       directory: true,
@@ -77,36 +57,15 @@ export function LegacyImportDialog({
         ))
       )
         return;
-      let completed = 0;
-      progressTotal.current = total;
-      let imported = 0;
-      const failures: string[] = [];
-      for (let i = 0; i < folders.length; i += 1) {
-        progressOffset.current = completed;
-        setProgress({ completed, total });
-        const result = await invoke<LegacyImportResult>(
-          "import_legacy_directory",
-          { request: { directoryPath: folders[i], tagIds, categoryIds } },
-        );
-        completed += counts[i];
-        setProgress({ completed, total });
-        imported += result.imported.length;
-        failures.push(
-          ...result.failures.map(
-            (item) => item.sourceFilename + ": " + item.reason,
-          ),
-        );
-      }
-      await onDone(
-        imported +
-          "件を旧形式ZIPから登録しました" +
-          (failures.length ? "（失敗: " + failures.join(" / ") + "）" : ""),
-      );
+      await invoke("start_legacy_import", {
+        request: { directoryPaths: folders, tagIds, categoryIds },
+      });
+      onStarted(total);
+      onClose();
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(false);
-      setProgress(null);
     }
   };
   return (
@@ -151,14 +110,6 @@ export function LegacyImportDialog({
           setTagIds={setTagIds}
           setCategoryIds={setCategoryIds}
         />
-        {progress && (
-          <div className="dialog-progress">
-            <b>
-              取り込み中: {progress.completed} / {progress.total} 件
-            </b>
-            <progress value={progress.completed} max={progress.total} />
-          </div>
-        )}
         {error && <p className="error">{error}</p>}
         <div className="dialog-actions">
           <button className="secondary" disabled={busy} onClick={onClose}>

@@ -7,11 +7,10 @@ import { useSettingsPanel } from "./lib/settings-panel";
 import { openTextDialog } from "./lib/text-dialog";
 import { confirmDialog } from "./lib/confirm-dialog";
 import { AssetLabels } from "./components/AssetLabels";
-import { ImportLabels } from "./components/ImportLabels";
 import { AssetDialog } from "./components/AssetDialog";
 import { LegacyImportDialog } from "./components/LegacyImportDialog";
 import { DetailEditor } from "./components/DetailEditor";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import type {
   Asset,
   BackupEntry,
@@ -19,7 +18,7 @@ import type {
   Category,
   Detail,
   LegacyImportProgress,
-  LegacyImportResult,
+  LegacyImportComplete,
   Status,
   Tag,
 } from "./types";
@@ -53,10 +52,11 @@ function App() {
   const [importTitle, setImportTitle] = useState("");
   const [importTagIds, setImportTagIds] = useState<string[]>([]);
   const [importCategoryIds, setImportCategoryIds] = useState<string[]>([]);
-  const [legacyDirectory, setLegacyDirectory] = useState<string | null>(null);
-  const [legacyArchiveCount, setLegacyArchiveCount] = useState(0);
   const [legacyProgress, setLegacyProgress] =
     useState<LegacyImportProgress | null>(null);
+  const [legacyImportNotice, setLegacyImportNotice] = useState<string | null>(
+    null,
+  );
   const [assetDialogOpen, setAssetDialogOpen] = useState(false);
   const [legacyImportOpen, setLegacyImportOpen] = useState(false);
   const [relationTarget, setRelationTarget] = useState("");
@@ -102,6 +102,30 @@ function App() {
   };
   useEffect(() => {
     void refresh().catch((reason: unknown) => setError(String(reason)));
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<LegacyImportComplete>("legacy-import-complete", (event) => {
+      setLegacyProgress(null);
+      const { result, error: importError } = event.payload;
+      if (importError) {
+        setError(importError);
+        return;
+      }
+      if (!result) return;
+      const failures = result.failures.length
+        ? `（失敗: ${result.failures.map((item) => `${item.sourceFilename}: ${item.reason}`).join(" / ")}）`
+        : "";
+      setLegacyImportNotice(
+        `${result.imported.length}件を旧形式ZIPから登録しました${failures}`,
+      );
+      void refresh().then(async () => {
+        if (result.imported[0]) await select(result.imported[0].assetId);
+      });
+    }).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
   }, []);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -180,68 +204,6 @@ function App() {
       setError(String(reason));
     } finally {
       setBusy(false);
-    }
-  };
-  const chooseLegacyDirectory = async () => {
-    const result = await open({
-      directory: true,
-      multiple: false,
-      title: "旧形式ZIPが入ったフォルダを選択",
-    });
-    if (typeof result !== "string") return;
-    try {
-      const count = await invoke<number>("count_legacy_archives", {
-        directoryPath: result,
-      });
-      if (!count) {
-        setError("指定フォルダ直下にZIPがありません");
-        return;
-      }
-      if (
-        !(await confirmDialog(
-          "旧形式ZIPを取り込む",
-          `${count}個のZIPを取り込みますか？`,
-          "取り込み開始",
-        ))
-      )
-        return;
-      setLegacyArchiveCount(count);
-      setLegacyDirectory(result);
-    } catch (reason) {
-      setError(String(reason));
-    }
-  };
-  const importLegacyDirectory = async () => {
-    if (!legacyDirectory) return;
-    setBusy(true);
-    setLegacyProgress({ completed: 0, total: legacyArchiveCount });
-    try {
-      const result = await invoke<LegacyImportResult>(
-        "import_legacy_directory",
-        {
-          request: {
-            directoryPath: legacyDirectory,
-            tagIds: importTagIds,
-            categoryIds: importCategoryIds,
-          },
-        },
-      );
-      setLegacyDirectory(null);
-      setImportTagIds([]);
-      setImportCategoryIds([]);
-      const failures = result.failures.length
-        ? `（失敗: ${result.failures.map((item) => `${item.sourceFilename}: ${item.reason}`).join(" / ")}）`
-        : "";
-      setMessage(
-        `${result.imported.length}件を旧形式ZIPから登録しました${failures}`,
-      );
-      await refresh();
-      if (result.imported[0]) await select(result.imported[0].assetId);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-      setLegacyProgress(null);
     }
   };
   const save = async () => {
@@ -664,59 +626,25 @@ function App() {
               onChange={(event) => setQuery(event.target.value)}
             />
           </header>
-          {(pendingFiles.length > 0 || legacyDirectory) && (
+          {pendingFiles.length > 0 && (
             <section className="import-bar">
-              {legacyDirectory ? (
-                <>
-                  <b>旧形式ZIP: {nameOf(legacyDirectory)}</b>
-                </>
-              ) : (
-                <>
-                  <input
-                    value={importTitle}
-                    onChange={(event) => setImportTitle(event.target.value)}
-                  />
-                  <span>{pendingFiles.length} ファイル</span>
-                </>
-              )}
-              {legacyProgress && (
-                <div className="import-progress">
-                  <span>
-                    {legacyProgress.completed} / {legacyProgress.total} 件
-                  </span>
-                  <progress
-                    value={legacyProgress.completed}
-                    max={legacyProgress.total}
-                  />
-                </div>
-              )}
-              <ImportLabels
-                tags={tags}
-                categories={categories}
-                tagIds={importTagIds}
-                categoryIds={importCategoryIds}
-                setTagIds={setImportTagIds}
-                setCategoryIds={setImportCategoryIds}
+              <input
+                value={importTitle}
+                onChange={(event) => setImportTitle(event.target.value)}
               />
+              <span>{pendingFiles.length} ファイル</span>
               <button
                 className="secondary"
                 onClick={() => {
                   setPendingFiles([]);
-                  setLegacyDirectory(null);
-                  setImportTagIds([]);
-                  setImportCategoryIds([]);
                 }}
               >
                 キャンセル
               </button>
               <button
                 className="primary"
-                disabled={busy || (!legacyDirectory && !importTitle)}
-                onClick={() =>
-                  void (legacyDirectory
-                    ? importLegacyDirectory()
-                    : importFiles())
-                }
+                disabled={busy || !importTitle}
+                onClick={() => void importFiles()}
               >
                 登録
               </button>
@@ -724,6 +652,36 @@ function App() {
           )}
           {message && <p className="success">{message}</p>}
           {error && <p className="error">{error}</p>}
+          {(legacyProgress || legacyImportNotice) && (
+            <div className="legacy-progress-toast" role="status">
+              {legacyProgress ? (
+                <>
+                  <b>旧形式ZIPを取り込み中</b>
+                  <span>
+                    {legacyProgress.completed} / {legacyProgress.total} 件
+                  </span>
+                  <progress
+                    value={legacyProgress.completed}
+                    max={legacyProgress.total}
+                  />
+                </>
+              ) : (
+                <>
+                  <div className="legacy-progress-toast__head">
+                    <b>旧形式ZIPの取り込み完了</b>
+                    <button
+                      className="icon-button"
+                      aria-label="通知を閉じる"
+                      onClick={() => setLegacyImportNotice(null)}
+                    >
+                      <X aria-hidden="true" size={18} />
+                    </button>
+                  </div>
+                  <span>{legacyImportNotice}</span>
+                </>
+              )}
+            </div>
+          )}
           <div className="asset-grid">
             {filtered.map((asset) => (
               <button
@@ -867,11 +825,7 @@ function App() {
           tags={tags}
           categories={categories}
           onClose={() => setLegacyImportOpen(false)}
-          onDone={async (text) => {
-            setLegacyImportOpen(false);
-            setMessage(text);
-            await refresh();
-          }}
+          onStarted={(total) => setLegacyProgress({ completed: 0, total })}
         />
       )}
     </div>
