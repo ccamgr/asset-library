@@ -13,7 +13,7 @@ export type Asset = {
   title: string;
   creator: string | null;
   searchText: string;
-  coverDataUrl: string | null;
+  coverPath: string | null;
   tags: Tag[];
   categories: Category[];
 };

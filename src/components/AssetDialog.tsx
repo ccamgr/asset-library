@@ -28,14 +28,18 @@ export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
   const showOptional =
     localStorage.getItem("asset-library.show-optional-fields") === "true";
   const choose = async () => {
-    const result = await open({
-      multiple: true,
-      title: "登録するファイルを選択",
-    });
-    const paths = Array.isArray(result) ? result : result ? [result] : [];
-    if (paths.length) {
-      setFiles(paths);
-      if (!title) setTitle(titleOf(paths[0]));
+    try {
+      const result = await open({
+        multiple: true,
+        title: "登録するファイルを選択",
+      });
+      const paths = Array.isArray(result) ? result : result ? [result] : [];
+      if (paths.length) {
+        setFiles(paths);
+        if (!title) setTitle(titleOf(paths[0]));
+      }
+    } catch (reason) {
+      setError(String(reason));
     }
   };
   const submit = async () => {
@@ -135,7 +139,7 @@ export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
         </label>
         <section className="file-select">
           <b>登録ファイル</b>
-          <button className="secondary compact" onClick={() => void choose()}>
+          <button className="secondary compact" disabled={busy} onClick={() => void choose()}>
             ファイルを選択
           </button>
           <p>

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Write},
     path::{Component, Path, PathBuf},
@@ -128,16 +129,6 @@ struct ImportResult {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct LegacyDirectoryImportRequest {
-    directory_path: String,
-    #[serde(default)]
-    tag_ids: Vec<String>,
-    #[serde(default)]
-    category_ids: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct LegacyBatchImportRequest {
     directory_paths: Vec<String>,
     #[serde(default)]
@@ -174,7 +165,7 @@ struct LegacyImportProgress {
     total: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Tag {
     id: String,
@@ -182,7 +173,7 @@ struct Tag {
     color: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Category {
     id: String,
@@ -198,7 +189,7 @@ struct AssetSummary {
     title: String,
     creator: Option<String>,
     search_text: String,
-    cover_data_url: Option<String>,
+    cover_path: Option<String>,
     tags: Vec<Tag>,
     categories: Vec<Category>,
 }
@@ -433,62 +424,6 @@ fn count_legacy_archives(directory_path: String) -> Result<usize, String> {
 }
 
 #[tauri::command]
-fn import_legacy_directory(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: LegacyDirectoryImportRequest,
-) -> Result<LegacyDirectoryImportResult, String> {
-    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let archives = legacy_archives(Path::new(request.directory_path.trim()))
-        .map_err(|error| error.to_string())?;
-    let total = archives.len();
-
-    let mut imported = Vec::new();
-    let mut failures = Vec::new();
-    for (index, archive) in archives.into_iter().enumerate() {
-        let source_filename = archive
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("(名前を取得できないZIP)")
-            .to_owned();
-        match import_legacy_archive(&locations, &archive) {
-            Ok(result) => {
-                if let Err(error) = assign_import_labels(
-                    &locations.library_root.join(DATABASE_FILE),
-                    &result.asset_id,
-                    &request.tag_ids,
-                    &request.category_ids,
-                ) {
-                    let _ = remove_imported_asset(
-                        &locations.library_root.join(DATABASE_FILE),
-                        &locations.asset_storage_root,
-                        &result.asset_id,
-                    );
-                    failures.push(LegacyImportFailure {
-                        source_filename,
-                        reason: format!("ラベルの設定に失敗しました: {error}"),
-                    });
-                } else {
-                    imported.push(result);
-                }
-            }
-            Err(error) => failures.push(LegacyImportFailure {
-                source_filename,
-                reason: error.to_string(),
-            }),
-        }
-        let _ = app.emit(
-            "legacy-import-progress",
-            LegacyImportProgress {
-                completed: index + 1,
-                total,
-            },
-        );
-    }
-    Ok(LegacyDirectoryImportResult { imported, failures })
-}
-
-#[tauri::command]
 fn start_legacy_import(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -602,11 +537,15 @@ fn list_assets(
     app: AppHandle,
     state: State<'_, AppState>,
     query: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<Vec<AssetSummary>, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
     let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
         .map_err(|error| error.to_string())?;
     let search = format!("%{}%", query.unwrap_or_default().trim());
+    let limit = limit.unwrap_or(100).clamp(1, 200) as i64;
+    let offset = offset.unwrap_or(0) as i64;
     let mut statement = connection
         .prepare(
             "SELECT id, title, creator, cover_path,
@@ -614,12 +553,18 @@ fn list_assets(
                     COALESCE(product_url, '') || ' ' ||
                     COALESCE(version, '') || ' ' || COALESCE(note, '')
              FROM assets
-             WHERE title LIKE ?1 OR COALESCE(creator, '') LIKE ?1 OR COALESCE(note, '') LIKE ?1
-             ORDER BY updated_at DESC, title COLLATE NOCASE",
+             WHERE title LIKE ?1
+                OR COALESCE(creator, '') LIKE ?1
+                OR COALESCE(source, '') LIKE ?1
+                OR COALESCE(product_url, '') LIKE ?1
+                OR COALESCE(version, '') LIKE ?1
+                OR COALESCE(note, '') LIKE ?1
+             ORDER BY updated_at DESC, title COLLATE NOCASE
+             LIMIT ?2 OFFSET ?3",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![search], |row| {
+        .query_map(params![search, limit, offset], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -630,20 +575,32 @@ fn list_assets(
         })
         .map_err(|error| error.to_string())?;
 
-    let mut assets = Vec::new();
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let asset_ids = rows
+        .iter()
+        .map(|(id, _, _, _, _)| id.as_str())
+        .collect::<Vec<_>>();
+    let mut tags_by_asset =
+        tags_for_assets(&connection, &asset_ids).map_err(|error| error.to_string())?;
+    let mut categories_by_asset =
+        categories_for_assets(&connection, &asset_ids).map_err(|error| error.to_string())?;
+    let mut assets = Vec::with_capacity(rows.len());
     for row in rows {
-        let (id, title, creator, cover_path, search_text) =
-            row.map_err(|error| error.to_string())?;
-        let tags = tags_for_asset(&connection, &id).map_err(|error| error.to_string())?;
-        let categories =
-            categories_for_asset(&connection, &id).map_err(|error| error.to_string())?;
+        let (id, title, creator, cover_path, search_text) = row;
+        let tags = tags_by_asset.remove(&id).unwrap_or_default();
+        let categories = categories_by_asset.remove(&id).unwrap_or_default();
         assets.push(AssetSummary {
             id,
             title,
             creator,
             search_text,
-            cover_data_url: cover_path
-                .and_then(|path| cover_data_url(&locations.asset_storage_root, &path)),
+            // Sending every cover as a base64 data URL makes listing a large
+            // library both CPU- and memory-heavy.  The UI reads this local
+            // path through Tauri's scoped asset protocol only when rendered.
+            cover_path: cover_path
+                .map(|path| display_path(&locations.asset_storage_root.join(path))),
             tags,
             categories,
         });
@@ -676,7 +633,7 @@ fn update_asset(
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
     let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
         .map_err(|error| error.to_string())?;
-    connection
+    let changed = connection
         .execute(
             "UPDATE assets SET title=?2, creator=?3, source=?4, product_url=?5,
              version=?6, note=?7, updated_at=?8 WHERE id=?1",
@@ -692,6 +649,9 @@ fn update_asset(
             ],
         )
         .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("アセットが見つかりません".into());
+    }
     Ok(())
 }
 
@@ -1312,6 +1272,39 @@ fn tags_for_asset(connection: &Connection, asset_id: &str) -> LibraryResult<Vec<
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+fn tags_for_assets(
+    connection: &Connection,
+    asset_ids: &[&str],
+) -> LibraryResult<HashMap<String, Vec<Tag>>> {
+    if asset_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(asset_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT at.asset_id, t.id, t.name, t.color FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id IN ({placeholders}) ORDER BY t.name COLLATE NOCASE"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(rusqlite::params_from_iter(asset_ids.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            Tag {
+                id: row.get(1)?,
+                name: row.get(2)?,
+                color: row.get(3)?,
+            },
+        ))
+    })?;
+    let mut grouped = HashMap::<String, Vec<Tag>>::new();
+    for row in rows {
+        let (asset_id, tag) = row?;
+        grouped.entry(asset_id).or_default().push(tag);
+    }
+    Ok(grouped)
+}
+
 fn all_categories(connection: &Connection) -> LibraryResult<Vec<Category>> {
     let mut statement = connection.prepare("SELECT id, parent_id, name, sort_order FROM categories ORDER BY sort_order, name COLLATE NOCASE")?;
     let rows = statement.query_map([], |row| {
@@ -1325,17 +1318,38 @@ fn all_categories(connection: &Connection) -> LibraryResult<Vec<Category>> {
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
-fn categories_for_asset(connection: &Connection, asset_id: &str) -> LibraryResult<Vec<Category>> {
-    let mut statement = connection.prepare("SELECT c.id, c.parent_id, c.name, c.sort_order FROM categories c JOIN asset_categories ac ON ac.category_id=c.id WHERE ac.asset_id=?1 ORDER BY c.sort_order, c.name COLLATE NOCASE")?;
-    let rows = statement.query_map(params![asset_id], |row| {
-        Ok(Category {
-            id: row.get(0)?,
-            parent_id: row.get(1)?,
-            name: row.get(2)?,
-            sort_order: row.get(3)?,
-        })
+fn categories_for_assets(
+    connection: &Connection,
+    asset_ids: &[&str],
+) -> LibraryResult<HashMap<String, Vec<Category>>> {
+    if asset_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(asset_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT ac.asset_id, c.id, c.parent_id, c.name, c.sort_order FROM asset_categories ac JOIN categories c ON c.id=ac.category_id WHERE ac.asset_id IN ({placeholders}) ORDER BY c.sort_order, c.name COLLATE NOCASE"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(rusqlite::params_from_iter(asset_ids.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            Category {
+                id: row.get(1)?,
+                parent_id: row.get(2)?,
+                name: row.get(3)?,
+                sort_order: row.get(4)?,
+            },
+        ))
     })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    let mut grouped = HashMap::<String, Vec<Category>>::new();
+    for row in rows {
+        let (asset_id, category) = row?;
+        grouped.entry(asset_id).or_default().push(category);
+    }
+    Ok(grouped)
 }
 
 fn asset_detail(
@@ -1535,8 +1549,8 @@ fn prepare_library(
     fs::create_dir_all(asset_storage_root.join("assets"))?;
     fs::create_dir_all(database_backup_root)?;
     let database_path = root.join(DATABASE_FILE);
-    let connection = Connection::open(database_path)?;
-    migrate(&connection)?;
+    let mut connection = Connection::open(database_path)?;
+    migrate(&mut connection)?;
     Ok(())
 }
 
@@ -1604,8 +1618,8 @@ fn import_into_library(
         let asset_directory = asset_storage_root.join("assets").join(&asset_id);
         copy_staged_asset(&staging_asset_dir, &asset_directory, &files)?;
 
-        let database_result = insert_imported_asset(&database_path, &asset_id, title, &files)
-            .and_then(|_| apply_import_metadata(&database_path, &asset_id, &request));
+        let database_result =
+            insert_imported_asset(&database_path, &asset_id, title, &files, Some(&request));
         if let Err(error) = database_result {
             let _ = fs::remove_dir_all(&asset_directory);
             return Err(error);
@@ -1623,30 +1637,6 @@ fn import_into_library(
         let _ = fs::remove_dir_all(&staging_asset_dir);
     }
     import_result
-}
-
-fn apply_import_metadata(
-    database_path: &Path,
-    asset_id: &str,
-    request: &ImportRequest,
-) -> LibraryResult<()> {
-    let connection = Connection::open(database_path)?;
-    connection.execute(
-        "UPDATE assets
-         SET creator = ?1, source = ?2, product_url = ?3,
-             version = ?4, note = ?5, updated_at = ?6
-         WHERE id = ?7",
-        params![
-            request.creator,
-            request.source,
-            request.product_url,
-            request.version,
-            request.note,
-            unix_timestamp(),
-            asset_id,
-        ],
-    )?;
-    Ok(())
 }
 
 fn import_legacy_archive(
@@ -1918,14 +1908,25 @@ fn insert_imported_asset(
     asset_id: &str,
     title: &str,
     files: &[ImportedFile],
+    request: Option<&ImportRequest>,
 ) -> LibraryResult<()> {
     let mut connection = Connection::open(database_path)?;
     connection.execute_batch("PRAGMA foreign_keys = ON;")?;
     let transaction = connection.transaction()?;
     let timestamp = unix_timestamp();
     transaction.execute(
-        "INSERT INTO assets (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
-        params![asset_id, title, timestamp],
+        "INSERT INTO assets (id, title, creator, source, product_url, version, note, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        params![
+            asset_id,
+            title,
+            request.and_then(|value| value.creator.as_deref()),
+            request.and_then(|value| value.source.as_deref()),
+            request.and_then(|value| value.product_url.as_deref()),
+            request.and_then(|value| value.version.as_deref()),
+            request.and_then(|value| value.note.as_deref()),
+            timestamp,
+        ],
     )?;
 
     for file in files {
@@ -1960,7 +1961,7 @@ fn insert_legacy_imported_asset(
     note: Option<&str>,
     files: &[ImportedFile],
 ) -> LibraryResult<()> {
-    insert_imported_asset(database_path, asset_id, title, files)?;
+    insert_imported_asset(database_path, asset_id, title, files, None)?;
     let connection = Connection::open(database_path)?;
     connection.execute(
         "UPDATE assets
@@ -1984,6 +1985,11 @@ fn assign_import_labels(
     tag_ids: &[String],
     category_ids: &[String],
 ) -> LibraryResult<()> {
+    if category_ids.len() > 1 {
+        return Err(LibraryError::Message(
+            "カテゴリはアセットごとに1つだけ設定できます".into(),
+        ));
+    }
     if tag_ids.is_empty() && category_ids.is_empty() {
         return Ok(());
     }
@@ -2045,11 +2051,20 @@ fn remove_imported_asset(
     Ok(())
 }
 
-fn migrate(connection: &Connection) -> LibraryResult<()> {
+fn migrate(connection: &mut Connection) -> LibraryResult<()> {
+    // A half-applied schema migration makes the library hard to recover.  Keep
+    // schema creation, data cleanup, and the version marker in one SQLite
+    // transaction instead.
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let transaction = connection.transaction()?;
+    migrate_schema(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn migrate_schema(connection: &Connection) -> LibraryResult<()> {
     connection.execute_batch(
         "
-        PRAGMA foreign_keys = ON;
-
         CREATE TABLE IF NOT EXISTS app_metadata (
           key TEXT PRIMARY KEY NOT NULL,
           value TEXT NOT NULL
@@ -2119,6 +2134,10 @@ fn migrate(connection: &Connection) -> LibraryResult<()> {
           PRIMARY KEY (source_asset_id, target_asset_id, relation_type),
           CHECK(source_asset_id <> target_asset_id)
         );
+
+        CREATE INDEX IF NOT EXISTS idx_assets_updated_at ON assets(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_asset_files_asset_id ON asset_files(asset_id);
+        CREATE INDEX IF NOT EXISTS idx_asset_relations_target_asset_id ON asset_relations(target_asset_id);
         ",
     )?;
 
@@ -2148,6 +2167,17 @@ fn migrate(connection: &Connection) -> LibraryResult<()> {
         )?;
         connection.execute_batch("ALTER TABLE assets DROP COLUMN description;")?;
     }
+
+    connection.execute_batch(
+        "
+        DELETE FROM asset_categories
+        WHERE rowid NOT IN (
+          SELECT MIN(rowid) FROM asset_categories GROUP BY asset_id
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_categories_one_per_asset
+        ON asset_categories(asset_id);
+        ",
+    )?;
 
     connection.execute(
         "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('schema_version', '2')",
@@ -2183,7 +2213,6 @@ pub fn run() {
             initialize_library,
             import_files,
             count_legacy_archives,
-            import_legacy_directory,
             start_legacy_import,
             list_assets,
             get_asset_detail,
@@ -2245,9 +2274,9 @@ mod tests {
     fn migrates_shop_url_into_the_single_product_url() {
         let database =
             std::env::temp_dir().join(format!("vr-asset-library-url-{}.db", Uuid::now_v7()));
-        let connection = Connection::open(&database).unwrap();
+        let mut connection = Connection::open(&database).unwrap();
         connection.execute_batch("CREATE TABLE assets (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, creator TEXT, source TEXT, product_url TEXT, shop_url TEXT, description TEXT, version TEXT, acquired_at INTEGER, note TEXT, cover_path TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); INSERT INTO assets (id, title, shop_url, created_at, updated_at) VALUES ('asset-1', 'Legacy', 'https://booth.pm/ja/items/1', 0, 0);").unwrap();
-        migrate(&connection).unwrap();
+        migrate(&mut connection).unwrap();
         let url: Option<String> = connection
             .query_row(
                 "SELECT product_url FROM assets WHERE id='asset-1'",
@@ -2265,6 +2294,19 @@ mod tests {
             .unwrap();
         assert!(!columns.iter().any(|column| column == "shop_url"));
         fs::remove_file(database).unwrap();
+    }
+
+    #[test]
+    fn schema_allows_only_one_category_per_asset() {
+        let root =
+            std::env::temp_dir().join(format!("vr-asset-library-category-{}", Uuid::now_v7()));
+        prepare_library(&root, &root.join("asset-storage"), &root.join("db-backups")).unwrap();
+        let connection = Connection::open(root.join(DATABASE_FILE)).unwrap();
+        connection.execute("INSERT INTO assets (id, title, created_at, updated_at) VALUES ('asset-1', 'Asset', 0, 0)", []).unwrap();
+        connection.execute("INSERT INTO categories (id, name) VALUES ('category-1', 'One'), ('category-2', 'Two')", []).unwrap();
+        connection.execute("INSERT INTO asset_categories (asset_id, category_id) VALUES ('asset-1', 'category-1')", []).unwrap();
+        assert!(connection.execute("INSERT INTO asset_categories (asset_id, category_id) VALUES ('asset-1', 'category-2')", []).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

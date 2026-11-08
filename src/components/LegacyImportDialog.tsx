@@ -24,13 +24,17 @@ export function LegacyImportDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const choose = async () => {
-    const result = await open({
-      directory: true,
-      multiple: true,
-      title: "旧形式ZIPが入ったフォルダを選択",
-    });
-    const paths = Array.isArray(result) ? result : result ? [result] : [];
-    setFolders((current) => [...new Set([...current, ...paths])]);
+    try {
+      const result = await open({
+        directory: true,
+        multiple: true,
+        title: "旧形式ZIPが入ったフォルダを選択",
+      });
+      const paths = Array.isArray(result) ? result : result ? [result] : [];
+      setFolders((current) => [...new Set([...current, ...paths])]);
+    } catch (reason) {
+      setError(String(reason));
+    }
   };
   const submit = async () => {
     if (!folders.length) {
@@ -82,7 +86,7 @@ export function LegacyImportDialog({
         </p>
         <section className="file-select">
           <b>対象フォルダ</b>
-          <button className="secondary compact" onClick={() => void choose()}>
+          <button className="secondary compact" disabled={busy} onClick={() => void choose()}>
             フォルダを追加
           </button>
           <ul>

@@ -156,24 +156,8 @@ textarea { min-height: 104px; resize: vertical; }
 .tag-filter-list { column-gap: 18px; display: flex; flex-wrap: wrap; row-gap: 10px; }
 .tag-filter-row { align-items: center; cursor: pointer; display: inline-flex; gap: 14px; margin: 0; }
 .tag-filter-row input { flex: none; }
-.capacity { border-top: 1px solid var(--color-divider); color: var(--color-muted); display: flex; flex-direction: column; font-size: .875rem; gap: 8px; margin-top: 28px; padding-top: 20px; }
-.capacity b { color: var(--color-text); }
-.capacity select { font-size: .8125rem; min-height: 40px; }
-.sidebar > .secondary.full:not(.settings-launcher), .sidebar > .capacity { display: none; }
 .settings-launcher { font-size: 1.8rem; line-height: 1; margin-top: auto; min-height: 48px; padding: 0; width: 48px; }
 
-.import-bar {
-  align-items: center;
-  background: var(--color-accent-subtle);
-  border: 1px solid var(--color-action);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 24px;
-  padding: 16px;
-}
-.import-bar input { flex: 1 1 180px; }
-.import-bar > span { color: var(--color-text); font-size: .875rem; }
 .import-labels { align-items: center; display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 8px 16px; }
 .import-labels > span { font-size: .875rem; font-weight: 700; }
 .import-labels .check { margin: 0; }
@@ -186,6 +170,7 @@ textarea { min-height: 104px; resize: vertical; }
 .legacy-progress-toast__head .icon-button { min-height: 28px; padding: 2px; }
 
 .asset-grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); margin-top: 28px; }
+.load-more { display: flex; justify-content: center; padding: 24px 0; }
 .asset-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);

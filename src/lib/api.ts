@@ -67,7 +67,7 @@ const summary = (asset: AnyRecord) => ({
   id: asset.id,
   title: asset.title,
   creator: asset.creator,
-  coverDataUrl: asset.coverDataUrl,
+  coverPath: asset.coverDataUrl,
   tags: asset.tags,
   categories: asset.categories,
   searchText: [
@@ -94,8 +94,15 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
         assetStoragePath: "ブラウザプレビュー",
         databaseBackupPath: "ブラウザプレビュー",
       } as T;
-    case "list_assets":
-      return assets.map(summary) as T;
+    case "list_assets": {
+      const query = String(args?.query ?? "").trim().toLocaleLowerCase();
+      const offset = Number(args?.offset ?? 0);
+      const limit = Number(args?.limit ?? 100);
+      return assets
+        .map(summary)
+        .filter((asset) => !query || asset.searchText.toLocaleLowerCase().includes(query))
+        .slice(offset, offset + limit) as T;
+    }
     case "get_asset_detail":
       return assets.find((asset) => asset.id === args?.assetId) as T;
     case "list_tags":
@@ -235,8 +242,6 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
     }
     case "count_legacy_archives":
       return 3 as T;
-    case "import_legacy_directory":
-      return { imported: [], failures: [] } as T;
     case "start_legacy_import": {
       const directories = data.directoryPaths ?? [];
       const total = Math.max(directories.length * 3, 1);

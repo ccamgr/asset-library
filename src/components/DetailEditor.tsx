@@ -66,7 +66,7 @@ export function DetailEditor({
           <X aria-hidden="true" size={20} />
         </button>
       </div>
-      <button className="cover-editor" onClick={onCover}>
+      <button className="cover-editor" disabled={busy} onClick={onCover}>
         {detail.coverDataUrl ? (
           <img src={detail.coverDataUrl} alt="カバー" />
         ) : (
@@ -97,7 +97,7 @@ export function DetailEditor({
           <button
             className="icon-button"
             aria-label="商品ページを開く"
-            disabled={!form.productUrl}
+            disabled={busy || !form.productUrl}
             onClick={() => onUrl(form.productUrl)}
           >
             <ExternalLink aria-hidden="true" size={18} />
@@ -140,6 +140,7 @@ export function DetailEditor({
           <label className="check" key={tag.id}>
             <input
               type="checkbox"
+              disabled={busy}
               checked={detail.tags.some((value) => value.id === tag.id)}
               onChange={(event) =>
                 onAssign(
@@ -171,6 +172,7 @@ export function DetailEditor({
           <label className="check" key={category.id}>
             <input
               type="radio"
+              disabled={busy}
               name="category"
               checked={detail.categories.some(
                 (value) => value.id === category.id,
@@ -192,7 +194,11 @@ export function DetailEditor({
       <section className="detail-section">
         <div className="side-title">
           <b>ファイル</b>
-          <button className="secondary compact" onClick={onAddFiles}>
+          <button
+            className="secondary compact"
+            disabled={busy}
+            onClick={onAddFiles}
+          >
             ファイルを追加
           </button>
         </div>
@@ -205,6 +211,7 @@ export function DetailEditor({
             <div>
               <button
                 className="secondary compact"
+                disabled={busy}
                 aria-label="ファイルの場所を開く"
                 onClick={() => onReveal(file.id)}
               >
@@ -212,6 +219,7 @@ export function DetailEditor({
               </button>
               <button
                 className="secondary compact"
+                disabled={busy}
                 onClick={() => onDeleteFile(file.id)}
               >
                 <Trash2 aria-label="ファイルを削除" size={18} />
@@ -256,7 +264,7 @@ export function DetailEditor({
         </select>
         <button
           className="secondary compact"
-          disabled={!relationTarget}
+          disabled={busy || !relationTarget}
           onClick={onRelation}
         >
           関連を追加
