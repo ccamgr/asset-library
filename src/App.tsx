@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "./lib/dialog";
 import { invoke, listen } from "./lib/api";
 import { useContextMenu } from "./lib/context-menu";
@@ -56,10 +56,18 @@ function App() {
 
   const reportFailure = (reason: unknown) => setError(String(reason));
 
-  const loadAssets = useCallback(async (search: string, offset = 0, append = false) => {
+  const loadAssets = useCallback(async (
+    search: string,
+    tagIds: string[],
+    categoryId: string | null,
+    offset = 0,
+    append = false,
+  ) => {
     const request = ++assetRequest.current;
     const nextAssets = await invoke<Asset[]>("list_assets", {
       query: search,
+      tagIds,
+      categoryId,
       limit: ASSET_PAGE_SIZE,
       offset,
     });
@@ -77,7 +85,7 @@ function App() {
     if (!next.initialized) return;
     const [, nextTags, nextCategories] =
       await Promise.all([
-        loadAssets(query),
+        loadAssets(query, tagFilterIds, categoryFilter),
         invoke<Tag[]>("list_tags"),
         invoke<Category[]>("list_categories"),
       ]);
@@ -104,14 +112,14 @@ function App() {
   }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadAssets(query).catch(reportFailure);
+      void loadAssets(query, tagFilterIds, categoryFilter).catch(reportFailure);
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [loadAssets, query]);
+  }, [categoryFilter, loadAssets, query, tagFilterIds]);
   const loadMoreAssets = async () => {
     setBusy(true);
     try {
-      await loadAssets(query, assets.length, true);
+      await loadAssets(query, tagFilterIds, categoryFilter, assets.length, true);
     } catch (reason) {
       reportFailure(reason);
     } finally {
@@ -285,20 +293,6 @@ function App() {
       setBusy(false);
     }
   };
-  const filtered = useMemo(
-    () =>
-      assets.filter(
-        (asset) =>
-          tagFilterIds.every((tagId) =>
-            asset.tags.some((tag) => tag.id === tagId),
-          ) &&
-          (!categoryFilter ||
-            asset.categories?.some(
-              (category) => category.id === categoryFilter,
-            )),
-      ),
-    [assets, categoryFilter, tagFilterIds],
-  );
   const contextMenuItems = useCallback(
     (event: MouseEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
@@ -393,7 +387,7 @@ function App() {
         const index = Array.from(
           document.querySelectorAll(".asset-card"),
         ).indexOf(card);
-        const asset = filtered[index];
+        const asset = assets[index];
         if (asset)
           return [
             {
@@ -424,7 +418,7 @@ function App() {
       }
       return null;
     },
-    [categories, categoryFilter, filtered, selected?.id, tags],
+    [assets, categories, categoryFilter, selected?.id, tags],
   );
   useContextMenu(contextMenuItems);
   const openLegacyImportFromSettings = useCallback(
@@ -472,7 +466,6 @@ function App() {
         <LibraryPane
           status={status}
           assets={assets}
-          filteredAssets={filtered}
           selectedId={selected?.id ?? null}
           query={query}
           busy={busy}
@@ -527,11 +520,11 @@ function App() {
           }}
           onAddFiles={async () => {
             if (!selected) return;
-            const result = await open({ multiple: true, title: "追加するファイルを選択" });
-            const paths = Array.isArray(result) ? result : result ? [result] : [];
-            if (!paths.length) return;
             setBusy(true);
             try {
+              const result = await open({ multiple: true, title: "追加するファイルを選択" });
+              const paths = Array.isArray(result) ? result : result ? [result] : [];
+              if (!paths.length) return;
               await invoke("add_asset_files", { request: { assetId: selected.id, sourcePaths: paths } });
               await refresh();
               await select(selected.id);

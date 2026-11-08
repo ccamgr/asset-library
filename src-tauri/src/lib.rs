@@ -12,7 +12,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use rusqlite::{params, Connection};
+use rusqlite::{params, types::Value, Connection};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
@@ -368,6 +368,7 @@ fn initialize_library(
             .map_err(|error| error.to_string())?;
     prepare_library(&library_path, &asset_storage_path, &database_backup_path)
         .map_err(|error| error.to_string())?;
+    allow_asset_storage(&app, &asset_storage_path).map_err(|error| error.to_string())?;
 
     let mut settings = state
         .settings
@@ -537,6 +538,8 @@ fn list_assets(
     app: AppHandle,
     state: State<'_, AppState>,
     query: Option<String>,
+    tag_ids: Option<Vec<String>>,
+    category_id: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<Vec<AssetSummary>, String> {
@@ -546,8 +549,29 @@ fn list_assets(
     let search = format!("%{}%", query.unwrap_or_default().trim());
     let limit = limit.unwrap_or(100).clamp(1, 200) as i64;
     let offset = offset.unwrap_or(0) as i64;
+    let tag_ids = tag_ids.unwrap_or_default();
+    let mut filters = String::new();
+    let mut values = vec![Value::Text(search)];
+    if let Some(category_id) = category_id.filter(|id| !id.is_empty()) {
+        filters.push_str(" AND EXISTS (SELECT 1 FROM asset_categories ac WHERE ac.asset_id = assets.id AND ac.category_id = ?)");
+        values.push(Value::Text(category_id));
+    }
+    if !tag_ids.is_empty() {
+        let tag_count = tag_ids.len() as i64;
+        let placeholders = std::iter::repeat("?")
+            .take(tag_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        filters.push_str(&format!(
+            " AND (SELECT COUNT(DISTINCT at.tag_id) FROM asset_tags at WHERE at.asset_id = assets.id AND at.tag_id IN ({placeholders})) = ?"
+        ));
+        values.extend(tag_ids.into_iter().map(Value::Text));
+        values.push(Value::Integer(tag_count));
+    }
+    values.push(Value::Integer(limit));
+    values.push(Value::Integer(offset));
     let mut statement = connection
-        .prepare(
+        .prepare(&format!(
             "SELECT id, title, creator, cover_path,
                     title || ' ' || COALESCE(creator, '') || ' ' || COALESCE(source, '') || ' ' ||
                     COALESCE(product_url, '') || ' ' ||
@@ -559,12 +583,13 @@ fn list_assets(
                 OR COALESCE(product_url, '') LIKE ?1
                 OR COALESCE(version, '') LIKE ?1
                 OR COALESCE(note, '') LIKE ?1
+             {filters}
              ORDER BY updated_at DESC, title COLLATE NOCASE
-             LIMIT ?2 OFFSET ?3",
-        )
+             LIMIT ? OFFSET ?"
+        ))
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![search, limit, offset], |row| {
+        .query_map(rusqlite::params_from_iter(values), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -596,9 +621,6 @@ fn list_assets(
             title,
             creator,
             search_text,
-            // Sending every cover as a base64 data URL makes listing a large
-            // library both CPU- and memory-heavy.  The UI reads this local
-            // path through Tauri's scoped asset protocol only when rendered.
             cover_path: cover_path
                 .map(|path| display_path(&locations.asset_storage_root.join(path))),
             tags,
@@ -1245,6 +1267,16 @@ fn storage_locations(
             .unwrap_or_else(|| library_root.join("database-backups")),
         library_root,
     })
+}
+
+fn allow_asset_storage(app: &AppHandle, asset_storage_root: &Path) -> LibraryResult<()> {
+    app.asset_protocol_scope()
+        .allow_directory(asset_storage_root, true)
+        .map_err(|error| {
+            LibraryError::Message(format!(
+                "アセット保存先を画像表示用に許可できません: {error}"
+            ))
+        })
 }
 
 fn all_tags(connection: &Connection) -> LibraryResult<Vec<Tag>> {
@@ -2204,6 +2236,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = AppState::load(app.handle())
+                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            let library_root = default_library_path(app.handle())
+                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            let asset_storage_root = state
+                .settings
+                .lock()
+                .map_err(|_| LibraryError::Message("設定のロックに失敗しました".into()))?
+                .asset_storage_path
+                .clone()
+                .unwrap_or_else(|| library_root.join("asset-storage"));
+            allow_asset_storage(app.handle(), &asset_storage_root)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             app.manage(state);
             Ok(())

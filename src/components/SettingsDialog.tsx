@@ -5,7 +5,10 @@ import { confirmDialog } from "../lib/confirm-dialog";
 import { bytes } from "../lib/utils";
 import type { BackupEntry, Capacity } from "../types";
 
-type Props = { onClose(): void; onOpenLegacyImport(): void };
+type Props = {
+  onClose(): void;
+  onOpenLegacyImport(): void;
+};
 
 export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
   const [capacity, setCapacity] = useState<Capacity | null>(null);
@@ -44,7 +47,13 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
   };
 
   const restore = async () => {
-    if (!selected || !(await confirmDialog("DBを復元", "現在のライブDBを選択したバックアップで復元します。続けますか？", "復元"))) return;
+    const confirmed = selected && await confirmDialog(
+      "DBを復元",
+      "現在のライブDBを選択したバックアップで復元します。続けますか？",
+      "復元",
+    );
+    if (!confirmed) return;
+
     setBusy(true);
     try {
       await invoke("restore_database_backup", { backupPath: selected });
@@ -55,6 +64,11 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const updateOptionalFields = (checked: boolean) => {
+    setShowOptional(checked);
+    localStorage.setItem("asset-library.show-optional-fields", String(checked));
   };
 
   return (
@@ -73,21 +87,31 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
         </section>
         <section className="settings-section">
           <h2>データベースのバックアップ</h2>
-          <button className="secondary" disabled={busy} onClick={() => void createBackup()}>DBをバックアップ</button>
+          <button className="secondary" disabled={busy} onClick={() => void createBackup()}>
+            DBをバックアップ
+          </button>
           <select disabled={busy} value={selected} onChange={(event) => setSelected(event.target.value)}>
             <option value="">復元するバックアップを選択</option>
-            {backups.map((backup) => <option key={backup.path} value={backup.path}>{backup.name} ({bytes(backup.byteSize)})</option>)}
+            {backups.map((backup) => (
+              <option key={backup.path} value={backup.path}>
+                {backup.name} ({bytes(backup.byteSize)})
+              </option>
+            ))}
           </select>
-          <button className="secondary" disabled={busy || !selected} onClick={() => void restore()}>選択したDBを復元</button>
+          <button className="secondary" disabled={busy || !selected} onClick={() => void restore()}>
+            選択したDBを復元
+          </button>
         </section>
         <section className="settings-section">
           <h2>データの取り込み</h2>
-          <button className="secondary" disabled={busy} onClick={() => { onClose(); onOpenLegacyImport(); }}>旧形式ZIPを一括取込</button>
+          <button className="secondary" disabled={busy} onClick={() => { onClose(); onOpenLegacyImport(); }}>
+            旧形式ZIPを一括取込
+          </button>
         </section>
         <section className="settings-section">
           <h2>表示項目</h2>
           <label className="check">
-            <input type="checkbox" checked={showOptional} onChange={(event) => { setShowOptional(event.target.checked); localStorage.setItem("asset-library.show-optional-fields", String(event.target.checked)); }} />
+            <input type="checkbox" checked={showOptional} onChange={(event) => updateOptionalFields(event.target.checked)} />
             配布元・バージョンを表示
           </label>
         </section>

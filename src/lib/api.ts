@@ -98,9 +98,15 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
       const query = String(args?.query ?? "").trim().toLocaleLowerCase();
       const offset = Number(args?.offset ?? 0);
       const limit = Number(args?.limit ?? 100);
+      const tagIds = Array.isArray(args?.tagIds) ? args.tagIds : [];
+      const categoryId = args?.categoryId ?? null;
       return assets
         .map(summary)
-        .filter((asset) => !query || asset.searchText.toLocaleLowerCase().includes(query))
+        .filter((asset) =>
+          (!query || asset.searchText.toLocaleLowerCase().includes(query)) &&
+          tagIds.every((tagId: string) => asset.tags.some((tag: AnyRecord) => tag.id === tagId)) &&
+          (!categoryId || asset.categories.some((category: AnyRecord) => category.id === categoryId)),
+        )
         .slice(offset, offset + limit) as T;
     }
     case "get_asset_detail":
