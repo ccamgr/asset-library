@@ -16,28 +16,52 @@ const categories = [
   { id: "cat-avatar", name: "アバター" },
   { id: "cat-outfit", name: "衣装" },
 ];
-const assets: AnyRecord[] = [
-  {
-    id: "demo-1",
-    title: "サンプル衣装",
-    creator: "Sample Shop",
+const mockAssets = [
+  ["サンプル衣装", "Sample Shop", 1],
+  ["アーバンパーカー", "mikanbox", 1],
+  ["フリルワンピース", "atelier Lune", 1],
+  ["ストリートジャケット", "Kuroko Lab", 1],
+  ["夏色セーラーセット", "aozora", 1],
+  ["オーバーサイズニット", "mofu-mofu", 1],
+  ["サイバーゴーグル", "Pixel Forge", 1],
+  ["ネオンスニーカー", "Kuroko Lab", 1],
+  ["キツネ耳アクセサリー", "komorebi", 1],
+  ["ハンドサインギミック", "Gizmo Factory", 0],
+  ["表情アニメーションセット", "Smile Works", 0],
+  ["ワールド用ポスター集", "Palette Room", 0],
+  ["桔梗用ヘアスタイル", "mikanbox", 0],
+  ["アバター向けシェーダー設定", "Shader Note", 0],
+  ["雨の日レインコート", "atelier Lune", 1],
+  ["和風ストリートコーデ", "komorebi", 1],
+  ["メカニカルウイング", "Gizmo Factory", 0],
+  ["ライブ用ペンライト", "Pixel Forge", 0],
+  ["ローポリ展示台", "Palette Room", 0],
+  ["冬のマフラーセット", "mofu-mofu", 1],
+] as const;
+
+const assets: AnyRecord[] = mockAssets.map(([title, creator, category], index) => {
+  const id = `demo-${index + 1}`;
+  return {
+    id,
+    title,
+    creator,
     source: "BOOTH",
-    productUrl: "https://booth.pm/",
-    version: "1.0.0",
-    note: "モックデータ",
+    productUrl: `https://booth.pm/ja/items/${1000 + index}`,
+    version: index % 3 === 0 ? "1.1.0" : "1.0.0",
+    note: index === 0 ? "モックデータ" : "ブラウザプレビュー用のサンプルアセット",
     coverDataUrl: null,
-    tags: [tags[0], tags[1]],
-    categories: [categories[1]],
+    tags: category ? [tags[0], ...(index % 2 === 0 ? [tags[1]] : [])] : [],
+    categories: [categories[category]],
     files: [
       {
-        id: "file-1",
-        originalFilename: "sample-outfit.zip",
-        byteSize: 12_582_912,
+        id: `file-${index + 1}`,
+        originalFilename: `${title.replaceAll(" ", "-")}.zip`,
+        byteSize: (index + 1) * 4_194_304,
       },
     ],
     relations: [],
-  },
-];
+  };
+});
 
 const summary = (asset: AnyRecord) => ({
   id: asset.id,

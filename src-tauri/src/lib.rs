@@ -753,14 +753,25 @@ fn delete_category(
     category_id: String,
 ) -> Result<(), String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
+    let mut connection = Connection::open(locations.library_root.join(DATABASE_FILE))
         .map_err(|error| error.to_string())?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| error.to_string())?;
-    connection
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    // Removing the assignment first deliberately leaves affected assets uncategorized.
+    transaction
+        .execute(
+            "DELETE FROM asset_categories WHERE category_id=?1",
+            params![category_id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
         .execute("DELETE FROM categories WHERE id=?1", params![category_id])
         .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
     Ok(())
 }
 

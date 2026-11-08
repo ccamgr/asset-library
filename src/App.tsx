@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "./lib/dialog";
 import { invoke, listen } from "./lib/api";
 import { useContextMenu } from "./lib/context-menu";
-import { useCategorySidebar } from "./lib/category-sidebar";
 import { useSettingsPanel } from "./lib/settings-panel";
 import { openTextDialog } from "./lib/text-dialog";
 import { confirmDialog } from "./lib/confirm-dialog";
@@ -10,7 +9,7 @@ import { AssetLabels } from "./components/AssetLabels";
 import { AssetDialog } from "./components/AssetDialog";
 import { LegacyImportDialog } from "./components/LegacyImportDialog";
 import { DetailEditor } from "./components/DetailEditor";
-import { Plus, Trash2, X } from "lucide-react";
+import { Plus, Save, Trash2, X } from "lucide-react";
 import type {
   Asset,
   BackupEntry,
@@ -46,7 +45,8 @@ function App() {
   const [selected, setSelected] = useState<Detail | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
-  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [tagFilterIds, setTagFilterIds] = useState<string[]>([]);
+  const [tagSearch, setTagSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
   const [importTitle, setImportTitle] = useState("");
@@ -321,21 +321,24 @@ function App() {
           `${asset.searchText} ${asset.tags.map((tag) => tag.name).join(" ")}`
             .toLowerCase()
             .includes(query.toLowerCase()) &&
-          (!tagFilter || asset.tags.some((tag) => tag.id === tagFilter)) &&
+          tagFilterIds.every((tagId) =>
+            asset.tags.some((tag) => tag.id === tagId),
+          ) &&
           (!categoryFilter ||
             asset.categories?.some(
               (category) => category.id === categoryFilter,
             )),
       ),
-    [assets, categoryFilter, query, tagFilter],
+    [assets, categoryFilter, query, tagFilterIds],
   );
   const contextMenuItems = useCallback(
     (event: MouseEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
-      const tagRow = target?.closest(".tag-filter-row");
-      if (tagRow) {
-        const name = tagRow.querySelector(".filter")?.textContent;
-        const tag = tags.find((item) => item.name === name);
+      const tagRow = target?.closest<HTMLElement>(
+        ".tag-filter-row[data-tag-id]",
+      );
+      if (tagRow?.dataset.tagId) {
+        const tag = tags.find((item) => item.id === tagRow.dataset.tagId);
         if (tag)
           return [
             {
@@ -368,7 +371,9 @@ function App() {
                   return;
                 try {
                   await invoke("delete_tag", { tagId: tag.id });
-                  if (tagFilter === tag.id) setTagFilter(null);
+                  setTagFilterIds((current) =>
+                    current.filter((id) => id !== tag.id),
+                  );
                   await refresh();
                 } catch (reason) {
                   setError(String(reason));
@@ -442,7 +447,7 @@ function App() {
       }
       return null;
     },
-    [categories, categoryFilter, filtered, selected?.id, tagFilter, tags],
+    [categories, categoryFilter, filtered, selected?.id, tags],
   );
   useContextMenu(contextMenuItems);
   const openLegacyImportFromSettings = useCallback(
@@ -452,12 +457,6 @@ function App() {
   useSettingsPanel({
     enabled: status?.initialized === true,
     onOpenLegacyImport: openLegacyImportFromSettings,
-  });
-  useCategorySidebar({
-    enabled: status?.initialized === true,
-    categories,
-    selectedId: categoryFilter,
-    onSelect: setCategoryFilter,
   });
 
   if (!status) return <main className="loading">読み込み中…</main>;
@@ -531,50 +530,95 @@ function App() {
           >
             旧形式ZIPを一括取込
           </button>
-          <div className="side-section">
+          <div className="side-section category-filter-section">
             <div className="side-title">
-              <b>タグ</b>
+              <b>カテゴリー</b>
               <button
                 className="icon-button"
-                onClick={() => void addEntity("tag")}
+                aria-label="カテゴリーを追加"
+                onClick={() => void addEntity("category")}
               >
-                ＋
+                <Plus aria-hidden="true" size={18} />
               </button>
             </div>
             <button
-              className={!tagFilter ? "filter active" : "filter"}
-              onClick={() => setTagFilter(null)}
+              className={!categoryFilter ? "filter active" : "filter"}
+              onClick={() => setCategoryFilter(null)}
             >
               すべて
             </button>
-            {tags.map((tag) => (
-              <div className="tag-filter-row" key={tag.id}>
+            {categories.map((category) => (
+              <div
+                className="category-filter-row"
+                data-category-id={category.id}
+                key={category.id}
+              >
                 <button
-                  className={tagFilter === tag.id ? "filter active" : "filter"}
-                  onClick={() => setTagFilter(tag.id)}
+                  className={
+                    categoryFilter === category.id ? "filter active" : "filter"
+                  }
+                  onClick={() => setCategoryFilter(category.id)}
                 >
-                  {tag.name}
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label={tag.name + "を削除"}
-                  onClick={async () => {
-                    if (
-                      !(await confirmDialog(
-                        "タグを削除",
-                        "タグ「" + tag.name + "」を削除しますか？",
-                      ))
-                    )
-                      return;
-                    await invoke("delete_tag", { tagId: tag.id });
-                    if (tagFilter === tag.id) setTagFilter(null);
-                    await refresh();
-                  }}
-                >
-                  ×
+                  {category.name}
                 </button>
               </div>
             ))}
+          </div>
+          <div className="side-section">
+            <div className="side-title">
+              <b>タグ</b>
+              <div className="side-actions">
+                <button
+                  className="secondary compact"
+                  disabled={!tagFilterIds.length}
+                  onClick={() => setTagFilterIds([])}
+                >
+                  全解除
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label="タグを追加"
+                  onClick={() => void addEntity("tag")}
+                >
+                  <Plus aria-hidden="true" size={18} />
+                </button>
+              </div>
+            </div>
+            <input
+              className="tag-filter-search"
+              type="search"
+              placeholder="タグを検索"
+              value={tagSearch}
+              onChange={(event) => setTagSearch(event.target.value)}
+            />
+            <div className="tag-filter-list">
+              {tags
+                .filter((tag) =>
+                  tag.name
+                    .toLocaleLowerCase()
+                    .includes(tagSearch.toLocaleLowerCase()),
+                )
+                .map((tag) => (
+                  <label
+                    className="tag-filter-row check"
+                    data-tag-id={tag.id}
+                    key={tag.id}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={tagFilterIds.includes(tag.id)}
+                      onChange={() =>
+                        setTagFilterIds((current) =>
+                          current.includes(tag.id)
+                            ? current.filter((id) => id !== tag.id)
+                            : [...current, tag.id],
+                        )
+                      }
+                    />
+                    {tag.name}
+                  </label>
+                ))}
+            </div>
           </div>
           {capacity && (
             <div className="capacity">
@@ -744,7 +788,6 @@ function App() {
                 setRelationType={setRelationType}
                 busy={busy}
                 onClose={() => setSelected(null)}
-                onSave={save}
                 onCover={setCover}
                 onAssign={assign}
                 onEntity={addEntity}
@@ -783,26 +826,33 @@ function App() {
                 onUrl={(url) => void invoke("open_external_url", { url })}
                 onRelation={addRelation}
                 onSelect={(id) => void select(id)}
-              />{" "}
-              <button
-                className="secondary compact"
-                onClick={async () => {
-                  if (
-                    !(await confirmDialog(
-                      "アセットを削除",
-                      "アセットと保存ファイルを削除しますか？",
-                    ))
-                  )
-                    return;
-                  await invoke("delete_asset", { assetId: selected.id });
-                  setSelected(null);
-                  await refresh();
-                }}
-              >
-                <>
+              />
+              <div className="detail-bottom-actions">
+                <button
+                  className="primary compact"
+                  disabled={busy}
+                  onClick={save}
+                >
+                  <Save aria-hidden="true" size={18} /> 保存
+                </button>
+                <button
+                  className="secondary compact"
+                  onClick={async () => {
+                    if (
+                      !(await confirmDialog(
+                        "アセットを削除",
+                        "アセットと保存ファイルを削除しますか？",
+                      ))
+                    )
+                      return;
+                    await invoke("delete_asset", { assetId: selected.id });
+                    setSelected(null);
+                    await refresh();
+                  }}
+                >
                   <Trash2 aria-hidden="true" size={18} /> アセットを削除
-                </>
-              </button>
+                </button>
+              </div>
             </>
           )}
         </aside>

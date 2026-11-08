@@ -1,5 +1,5 @@
 import type { Asset, Category, Detail, Tag } from "../types";
-import { Plus, Trash2, X } from "lucide-react";
+import { ExternalLink, FolderOpen, Plus, Trash2, X } from "lucide-react";
 
 type Props = {
   detail: Detail;
@@ -14,7 +14,6 @@ type Props = {
   setRelationType: (value: string) => void;
   busy: boolean;
   onClose: () => void;
-  onSave: () => void;
   onCover: () => void;
   onAssign: (kind: "tags" | "categories", ids: string[]) => void;
   onEntity: (kind: "tag" | "category") => void;
@@ -45,7 +44,6 @@ export function DetailEditor({
   setRelationType,
   busy,
   onClose,
-  onSave,
   onCover,
   onAssign,
   onEntity,
@@ -91,10 +89,20 @@ export function DetailEditor({
       </label>
       <label>
         商品URL
-        <input
-          value={form.productUrl ?? ""}
-          onChange={(event) => edit("productUrl", event.target.value)}
-        />
+        <div className="url-field">
+          <input
+            value={form.productUrl ?? ""}
+            onChange={(event) => edit("productUrl", event.target.value)}
+          />
+          <button
+            className="icon-button"
+            aria-label="商品ページを開く"
+            disabled={!form.productUrl}
+            onClick={() => onUrl(form.productUrl)}
+          >
+            <ExternalLink aria-hidden="true" size={18} />
+          </button>
+        </div>
       </label>
       {showOptional && (
         <>
@@ -114,18 +122,6 @@ export function DetailEditor({
           </label>
         </>
       )}
-      <div className="actions">
-        <button
-          className="secondary compact"
-          disabled={!form.productUrl}
-          onClick={() => onUrl(form.productUrl)}
-        >
-          商品ページを開く
-        </button>
-        <button className="primary compact" disabled={busy} onClick={onSave}>
-          保存
-        </button>
-      </div>
       <label>
         メモ
         <textarea
@@ -163,6 +159,13 @@ export function DetailEditor({
       <section className="detail-section">
         <div className="side-title">
           <b>カテゴリー</b>
+          <button
+            className="icon-button"
+            aria-label="カテゴリーを追加"
+            onClick={() => onEntity("category")}
+          >
+            <Plus aria-hidden="true" size={18} />
+          </button>
         </div>
         {categories.map((category) => (
           <label className="check" key={category.id}>
@@ -172,7 +175,15 @@ export function DetailEditor({
               checked={detail.categories.some(
                 (value) => value.id === category.id,
               )}
-              onChange={() => onAssign("categories", [category.id])}
+              onClick={() =>
+                onAssign(
+                  "categories",
+                  detail.categories.some((value) => value.id === category.id)
+                    ? []
+                    : [category.id],
+                )
+              }
+              readOnly
             />
             {category.name}
           </label>
@@ -194,9 +205,10 @@ export function DetailEditor({
             <div>
               <button
                 className="secondary compact"
+                aria-label="ファイルの場所を開く"
                 onClick={() => onReveal(file.id)}
               >
-                場所を開く
+                <FolderOpen aria-hidden="true" size={18} />
               </button>
               <button
                 className="secondary compact"
