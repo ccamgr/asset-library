@@ -1,17 +1,178 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "../lib/dialog";
 import { invoke, listen } from "../lib/api";
-import type { Category, LegacyImportProgress, LegacyImportResult, Tag } from "../types";
+import type {
+  Category,
+  LegacyImportProgress,
+  LegacyImportResult,
+  Tag,
+} from "../types";
 import { confirmDialog } from "../lib/confirm-dialog";
-import { ImportLabels } from "./ImportLabels";
+import { AssetLabels } from "./AssetLabels";
 
-type Props = { tags: Tag[]; categories: Category[]; onClose: () => void; onDone: (text: string) => Promise<void> };
+type Props = {
+  tags: Tag[];
+  categories: Category[];
+  onClose: () => void;
+  onDone: (text: string) => Promise<void>;
+};
 
-export function LegacyImportDialog({ tags, categories, onClose, onDone }: Props) {
-  const [folders, setFolders] = useState<string[]>([]); const [tagIds, setTagIds] = useState<string[]>([]); const [categoryIds, setCategoryIds] = useState<string[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null); const [progress, setProgress] = useState<LegacyImportProgress | null>(null);
-  const progressOffset = useRef(0); const progressTotal = useRef(0);
-  useEffect(() => { let unlisten: (() => void) | undefined; void listen<LegacyImportProgress>("legacy-import-progress", (event) => setProgress({ completed: progressOffset.current + event.payload.completed, total: progressTotal.current })).then((stop) => { unlisten = stop; }); return () => unlisten?.(); }, []);
-  const choose = async () => { const result = await open({ directory: true, multiple: true, title: "旧形式ZIPが入ったフォルダを選択" }); const paths = Array.isArray(result) ? result : result ? [result] : []; setFolders((current) => [...new Set([...current, ...paths])]); };
-  const submit = async () => { if (!folders.length) { setError("フォルダを指定してください"); return; } setBusy(true); try { const counts = await Promise.all(folders.map((directoryPath) => invoke<number>("count_legacy_archives", { directoryPath }))); const total = counts.reduce((a, b) => a + b, 0); if (!total) { setError("指定フォルダ直下にZIPがありません"); return; } if (!await confirmDialog("旧形式ZIPを取り込む", `${total}個のZIPを取り込みますか？`, "取り込み開始")) return; let completed = 0; progressTotal.current = total; let imported = 0; const failures: string[] = []; for (let i = 0; i < folders.length; i += 1) { progressOffset.current = completed; setProgress({ completed, total }); const result = await invoke<LegacyImportResult>("import_legacy_directory", { request: { directoryPath: folders[i], tagIds, categoryIds } }); completed += counts[i]; setProgress({ completed, total }); imported += result.imported.length; failures.push(...result.failures.map((item) => item.sourceFilename + ": " + item.reason)); } await onDone(imported + "件を旧形式ZIPから登録しました" + (failures.length ? "（失敗: " + failures.join(" / ") + "）" : "")); } catch (reason) { setError(String(reason)); } finally { setBusy(false); setProgress(null); } };
-  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="legacy-title"><h2 id="legacy-title">旧形式ZIPを一括取り込み</h2><p className="hint">複数フォルダを指定できます。各フォルダ直下のZIPを対象にします。</p><section className="file-select"><b>対象フォルダ</b><button className="secondary compact" onClick={() => void choose()}>フォルダを追加</button><ul>{folders.map((path) => <li key={path}>{path}<button className="icon-button" onClick={() => setFolders(folders.filter((item) => item !== path))}>解除</button></li>)}</ul>{!folders.length && <p>フォルダが選択されていません</p>}</section><ImportLabels tags={tags} categories={categories} tagIds={tagIds} categoryIds={categoryIds} setTagIds={setTagIds} setCategoryIds={setCategoryIds} />{progress && <div className="dialog-progress"><b>取り込み中: {progress.completed} / {progress.total} 件</b><progress value={progress.completed} max={progress.total} /></div>}{error && <p className="error">{error}</p>}<div className="dialog-actions"><button className="secondary" disabled={busy} onClick={onClose}>キャンセル</button><button className="primary" disabled={busy} onClick={() => void submit()}>{busy ? "取り込み中…" : "取り込み開始"}</button></div></section></div>;
+export function LegacyImportDialog({
+  tags,
+  categories,
+  onClose,
+  onDone,
+}: Props) {
+  const [folders, setFolders] = useState<string[]>([]);
+  const [tagIds, setTagIds] = useState<string[]>([]);
+  const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<LegacyImportProgress | null>(null);
+  const progressOffset = useRef(0);
+  const progressTotal = useRef(0);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<LegacyImportProgress>("legacy-import-progress", (event) =>
+      setProgress({
+        completed: progressOffset.current + event.payload.completed,
+        total: progressTotal.current,
+      }),
+    ).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
+  }, []);
+  const choose = async () => {
+    const result = await open({
+      directory: true,
+      multiple: true,
+      title: "旧形式ZIPが入ったフォルダを選択",
+    });
+    const paths = Array.isArray(result) ? result : result ? [result] : [];
+    setFolders((current) => [...new Set([...current, ...paths])]);
+  };
+  const submit = async () => {
+    if (!folders.length) {
+      setError("フォルダを指定してください");
+      return;
+    }
+    setBusy(true);
+    try {
+      const counts = await Promise.all(
+        folders.map((directoryPath) =>
+          invoke<number>("count_legacy_archives", { directoryPath }),
+        ),
+      );
+      const total = counts.reduce((a, b) => a + b, 0);
+      if (!total) {
+        setError("指定フォルダ直下にZIPがありません");
+        return;
+      }
+      if (
+        !(await confirmDialog(
+          "旧形式ZIPを取り込む",
+          `${total}個のZIPを取り込みますか？`,
+          "取り込み開始",
+        ))
+      )
+        return;
+      let completed = 0;
+      progressTotal.current = total;
+      let imported = 0;
+      const failures: string[] = [];
+      for (let i = 0; i < folders.length; i += 1) {
+        progressOffset.current = completed;
+        setProgress({ completed, total });
+        const result = await invoke<LegacyImportResult>(
+          "import_legacy_directory",
+          { request: { directoryPath: folders[i], tagIds, categoryIds } },
+        );
+        completed += counts[i];
+        setProgress({ completed, total });
+        imported += result.imported.length;
+        failures.push(
+          ...result.failures.map(
+            (item) => item.sourceFilename + ": " + item.reason,
+          ),
+        );
+      }
+      await onDone(
+        imported +
+          "件を旧形式ZIPから登録しました" +
+          (failures.length ? "（失敗: " + failures.join(" / ") + "）" : ""),
+      );
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+  return (
+    <div className="dialog-backdrop">
+      <section
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="legacy-title"
+      >
+        <h2 id="legacy-title">旧形式ZIPを一括取り込み</h2>
+        <p className="hint">
+          複数フォルダを指定できます。各フォルダ直下のZIPを対象にします。
+        </p>
+        <section className="file-select">
+          <b>対象フォルダ</b>
+          <button className="secondary compact" onClick={() => void choose()}>
+            フォルダを追加
+          </button>
+          <ul>
+            {folders.map((path) => (
+              <li key={path}>
+                {path}
+                <button
+                  className="icon-button"
+                  onClick={() =>
+                    setFolders(folders.filter((item) => item !== path))
+                  }
+                >
+                  解除
+                </button>
+              </li>
+            ))}
+          </ul>
+          {!folders.length && <p>フォルダが選択されていません</p>}
+        </section>
+        <AssetLabels
+          tags={tags}
+          categories={categories}
+          tagIds={tagIds}
+          categoryIds={categoryIds}
+          setTagIds={setTagIds}
+          setCategoryIds={setCategoryIds}
+        />
+        {progress && (
+          <div className="dialog-progress">
+            <b>
+              取り込み中: {progress.completed} / {progress.total} 件
+            </b>
+            <progress value={progress.completed} max={progress.total} />
+          </div>
+        )}
+        {error && <p className="error">{error}</p>}
+        <div className="dialog-actions">
+          <button className="secondary" disabled={busy} onClick={onClose}>
+            キャンセル
+          </button>
+          <button
+            className="primary"
+            disabled={busy}
+            onClick={() => void submit()}
+          >
+            {busy ? "取り込み中…" : "取り込み開始"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }

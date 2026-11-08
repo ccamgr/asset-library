@@ -1,4 +1,5 @@
 import type { Asset, Category, Detail, Tag } from "../types";
+import { Plus, Trash2, X } from "lucide-react";
 
 type Props = {
   detail: Detail;
@@ -64,7 +65,7 @@ export function DetailEditor({
       <div className="detail-head">
         <h2>詳細</h2>
         <button className="icon-button" onClick={onClose}>
-          ×
+          <X aria-hidden="true" size={20} />
         </button>
       </div>
       <button className="cover-editor" onClick={onCover}>
@@ -136,7 +137,7 @@ export function DetailEditor({
         <div className="side-title">
           <b>タグ</b>
           <button className="icon-button" onClick={() => onEntity("tag")}>
-            ＋
+            <Plus aria-hidden="true" size={18} />
           </button>
         </div>
         {tags.map((tag) => (
@@ -201,7 +202,7 @@ export function DetailEditor({
                 className="secondary compact"
                 onClick={() => onDeleteFile(file.id)}
               >
-                削除
+                <Trash2 aria-label="ファイルを削除" size={18} />
               </button>
             </div>
           </div>

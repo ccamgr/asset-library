@@ -11,6 +11,7 @@ import { ImportLabels } from "./components/ImportLabels";
 import { AssetDialog } from "./components/AssetDialog";
 import { LegacyImportDialog } from "./components/LegacyImportDialog";
 import { DetailEditor } from "./components/DetailEditor";
+import { Plus, Trash2 } from "lucide-react";
 import type {
   Asset,
   BackupEntry,
@@ -392,7 +393,8 @@ function App() {
                 }),
             },
             {
-              label: `🗑 タグ「${tag.name}」を削除`,
+              label: `タグ「${tag.name}」を削除`,
+              icon: <Trash2 aria-hidden="true" size={18} />,
               destructive: true,
               run: async () => {
                 if (
@@ -423,7 +425,8 @@ function App() {
         if (category)
           return [
             {
-              label: `🗑 カテゴリー「${category.name}」を削除`,
+              label: `カテゴリー「${category.name}」を削除`,
+              icon: <Trash2 aria-hidden="true" size={18} />,
               destructive: true,
               run: async () => {
                 if (
@@ -453,7 +456,8 @@ function App() {
         if (asset)
           return [
             {
-              label: `🗑 「${asset.title}」を削除`,
+              label: `「${asset.title}」を削除`,
+              icon: <Trash2 aria-hidden="true" size={18} />,
               destructive: true,
               run: async () => {
                 if (
@@ -556,7 +560,7 @@ function App() {
             className="primary full"
             onClick={() => setAssetDialogOpen(true)}
           >
-            ＋ 新規登録
+            <Plus aria-hidden="true" size={18} /> 追加
           </button>
           <button
             className="secondary full"
@@ -837,7 +841,9 @@ function App() {
                   await refresh();
                 }}
               >
-                🗑 アセットを削除
+                <>
+                  <Trash2 aria-hidden="true" size={18} /> アセットを削除
+                </>
               </button>
             </>
           )}

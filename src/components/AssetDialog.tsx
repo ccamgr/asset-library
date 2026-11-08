@@ -3,6 +3,7 @@ import { open } from "../lib/dialog";
 import { invoke } from "../lib/api";
 import type { Category, Tag } from "../types";
 import { AssetLabels } from "./AssetLabels";
+import { X } from "lucide-react";
 
 const nameOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
 const titleOf = (path: string) => nameOf(path).replace(/\.[^.]+$/, "");
@@ -84,7 +85,7 @@ export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
             aria-label="アセット追加を閉じる"
             onClick={onClose}
           >
-            ×
+            <X aria-hidden="true" size={20} />
           </button>
         </div>
         <p className="hint">項目とファイルを指定し、「追加」で確定します。</p>

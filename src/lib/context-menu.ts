@@ -1,7 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
 
 export type ContextMenuItem = {
   label: string;
+  icon?: ReactNode | null;
   destructive?: boolean;
   run: () => void | Promise<void>;
 };
@@ -15,9 +17,11 @@ type ContextMenuResolver = (event: MouseEvent) => ContextMenuItem[] | null;
 export function useContextMenu(resolve: ContextMenuResolver) {
   useEffect(() => {
     let menu: HTMLDivElement | null = null;
+    const iconRoots: Root[] = [];
 
     const close = () => {
       menu?.remove();
+      iconRoots.splice(0).forEach((root) => root.unmount());
       menu = null;
     };
 
@@ -34,8 +38,18 @@ export function useContextMenu(resolve: ContextMenuResolver) {
         const button = document.createElement("button");
         button.type = "button";
         button.setAttribute("role", "menuitem");
-        button.className = item.destructive ? "context-menu__item destructive" : "context-menu__item";
-        button.textContent = item.label;
+        button.className = item.destructive
+          ? "context-menu__item destructive"
+          : "context-menu__item";
+        if (item.icon) {
+          const holder = document.createElement("span");
+          holder.className = "context-menu__icon";
+          button.append(holder);
+          const root = createRoot(holder);
+          root.render(item.icon);
+          iconRoots.push(root);
+        }
+        button.append(document.createTextNode(item.label));
         button.addEventListener("click", () => {
           close();
           void item.run();
@@ -60,7 +74,12 @@ export function useContextMenu(resolve: ContextMenuResolver) {
     };
     const onDragStart = (event: DragEvent) => {
       const target = event.target;
-      if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+      if (
+        !(
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement
+        )
+      ) {
         event.preventDefault();
       }
     };
