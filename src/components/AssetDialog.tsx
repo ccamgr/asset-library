@@ -4,9 +4,7 @@ import { invoke } from "../lib/api";
 import type { Category, Tag } from "../types";
 import { AssetLabels } from "./AssetLabels";
 import { X } from "lucide-react";
-
-const nameOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
-const titleOf = (path: string) => nameOf(path).replace(/\.[^.]+$/, "");
+import { nameOf, titleOf } from "../lib/utils";
 
 type Props = {
   tags: Tag[];

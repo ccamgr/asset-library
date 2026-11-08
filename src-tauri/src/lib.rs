@@ -18,6 +18,9 @@ use thiserror::Error;
 use uuid::Uuid;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
+mod utils;
+use utils::{display_path, non_empty_name, optional_text};
+
 const SETTINGS_FILE: &str = "settings.json";
 const DATABASE_FILE: &str = "library.db";
 
@@ -1284,26 +1287,6 @@ fn storage_locations(
     })
 }
 
-fn optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let value = value.trim().to_owned();
-        (!value.is_empty()).then_some(value)
-    })
-}
-
-fn non_empty_name(value: &str) -> LibraryResult<String> {
-    let name = value.trim();
-    if name.is_empty() {
-        return Err(LibraryError::Message("名前を入力してください".into()));
-    }
-    if name.chars().count() > 80 {
-        return Err(LibraryError::Message(
-            "名前は80文字以内にしてください".into(),
-        ));
-    }
-    Ok(name.to_owned())
-}
-
 fn all_tags(connection: &Connection) -> LibraryResult<Vec<Tag>> {
     let mut statement =
         connection.prepare("SELECT id, name, color FROM tags ORDER BY name COLLATE NOCASE")?;
@@ -2176,10 +2159,6 @@ fn migrate(connection: &Connection) -> LibraryResult<()> {
 fn count_assets(database_path: &Path) -> LibraryResult<i64> {
     let connection = Connection::open(database_path)?;
     Ok(connection.query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))?)
-}
-
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }
 
 #[allow(dead_code)]

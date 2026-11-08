@@ -5,11 +5,16 @@ import { useContextMenu } from "./lib/context-menu";
 import { useSettingsPanel } from "./lib/settings-panel";
 import { openTextDialog } from "./lib/text-dialog";
 import { confirmDialog } from "./lib/confirm-dialog";
+import { bytes, nullable, titleOf } from "./lib/utils";
 import { AssetLabels } from "./components/AssetLabels";
 import { AssetDialog } from "./components/AssetDialog";
 import { LegacyImportDialog } from "./components/LegacyImportDialog";
 import { DetailEditor } from "./components/DetailEditor";
-import { Plus, Save, Trash2, X } from "lucide-react";
+import { SetupScreen } from "./components/SetupScreen";
+import { LibraryPane } from "./components/LibraryPane";
+import { AssetSidebar } from "./components/AssetSidebar";
+import { AssetDetailPane } from "./components/AssetDetailPane";
+import { Trash2 } from "lucide-react";
 import type {
   Asset,
   BackupEntry,
@@ -21,16 +26,6 @@ import type {
   Status,
   Tag,
 } from "./types";
-
-const nameOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
-const titleOf = (path: string) => nameOf(path).replace(/\.[^.]+$/, "");
-const bytes = (n: number) =>
-  n >= 1024 ** 3
-    ? `${(n / 1024 ** 3).toFixed(1)} GB`
-    : n >= 1024 ** 2
-      ? `${(n / 1024 ** 2).toFixed(1)} MB`
-      : `${n} B`;
-const nullable = (value: string) => value.trim() || null;
 
 function App() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -462,400 +457,110 @@ function App() {
   if (!status) return <main className="loading">読み込み中…</main>;
   if (!status.initialized)
     return (
-      <main className="shell setup">
-        <p className="eyebrow">ASSETLIBRARY</p>
-        <h1>保存先を決めましょう</h1>
-        <p className="intro">
-          DBとキャッシュはアプリデータフォルダに保存されます。
-        </p>
-        <section className="card">
-          <label>アセット保存先</label>
-          <div className="path-picker">
-            <input
-              value={storagePath}
-              onChange={(event) => setStoragePath(event.target.value)}
-            />
-            <button
-              className="secondary"
-              onClick={() =>
-                void chooseDirectory("アセット保存先", setStoragePath)
-              }
-            >
-              選択…
-            </button>
-          </div>
-          <p className="hint">実アセットとカバー画像を保存します。</p>
-          <label>DBバックアップ先</label>
-          <div className="path-picker">
-            <input
-              value={backupPath}
-              onChange={(event) => setBackupPath(event.target.value)}
-            />
-            <button
-              className="secondary"
-              onClick={() =>
-                void chooseDirectory("DBバックアップ先", setBackupPath)
-              }
-            >
-              選択…
-            </button>
-          </div>
-          {error && <p className="error">{error}</p>}
-          <button
-            className="primary"
-            disabled={busy || !storagePath || !backupPath}
-            onClick={() => void initialize()}
-          >
-            {busy ? "作成中…" : "ライブラリを作成"}
-          </button>
-        </section>
-      </main>
+      <SetupScreen
+        storagePath={storagePath}
+        backupPath={backupPath}
+        busy={busy}
+        error={error}
+        setStoragePath={setStoragePath}
+        setBackupPath={setBackupPath}
+        onChooseStorage={() =>
+          void chooseDirectory("アセット保存先", setStoragePath)
+        }
+        onChooseBackup={() =>
+          void chooseDirectory("DBバックアップ先", setBackupPath)
+        }
+        onInitialize={() => void initialize()}
+      />
     );
 
   return (
     <div className="app-root">
       <main className="app-shell">
-        <aside className="sidebar">
-          <p className="eyebrow">ASSETLIBRARY</p>
-          <button
-            className="primary full"
-            onClick={() => setAssetDialogOpen(true)}
-          >
-            <Plus aria-hidden="true" size={18} /> 追加
-          </button>
-          <button
-            className="secondary full"
-            disabled={busy}
-            onClick={() => setLegacyImportOpen(true)}
-          >
-            旧形式ZIPを一括取込
-          </button>
-          <div className="side-section category-filter-section">
-            <div className="side-title">
-              <b>カテゴリー</b>
-              <button
-                className="icon-button"
-                aria-label="カテゴリーを追加"
-                onClick={() => void addEntity("category")}
-              >
-                <Plus aria-hidden="true" size={18} />
-              </button>
-            </div>
-            <button
-              className={!categoryFilter ? "filter active" : "filter"}
-              onClick={() => setCategoryFilter(null)}
-            >
-              すべて
-            </button>
-            {categories.map((category) => (
-              <div
-                className="category-filter-row"
-                data-category-id={category.id}
-                key={category.id}
-              >
-                <button
-                  className={
-                    categoryFilter === category.id ? "filter active" : "filter"
-                  }
-                  onClick={() => setCategoryFilter(category.id)}
-                >
-                  {category.name}
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="side-section">
-            <div className="side-title">
-              <b>タグ</b>
-              <div className="side-actions">
-                <button
-                  className="secondary compact"
-                  disabled={!tagFilterIds.length}
-                  onClick={() => setTagFilterIds([])}
-                >
-                  全解除
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label="タグを追加"
-                  onClick={() => void addEntity("tag")}
-                >
-                  <Plus aria-hidden="true" size={18} />
-                </button>
-              </div>
-            </div>
-            <input
-              className="tag-filter-search"
-              type="search"
-              placeholder="タグを検索"
-              value={tagSearch}
-              onChange={(event) => setTagSearch(event.target.value)}
-            />
-            <div className="tag-filter-list">
-              {tags
-                .filter((tag) =>
-                  tag.name
-                    .toLocaleLowerCase()
-                    .includes(tagSearch.toLocaleLowerCase()),
-                )
-                .map((tag) => (
-                  <label
-                    className="tag-filter-row check"
-                    data-tag-id={tag.id}
-                    key={tag.id}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={tagFilterIds.includes(tag.id)}
-                      onChange={() =>
-                        setTagFilterIds((current) =>
-                          current.includes(tag.id)
-                            ? current.filter((id) => id !== tag.id)
-                            : [...current, tag.id],
-                        )
-                      }
-                    />
-                    {tag.name}
-                  </label>
-                ))}
-            </div>
-          </div>
-          {capacity && (
-            <div className="capacity">
-              <b>ストレージ</b>
-              <span>アセット {bytes(capacity.assetBytes)}</span>
-              <span>DBバックアップ {bytes(capacity.databaseBackupBytes)}</span>
-              <button
-                className="secondary compact"
-                disabled={busy}
-                onClick={() => void backup()}
-              >
-                DBをバックアップ
-              </button>
-              {backups.length > 0 && (
-                <>
-                  <select
-                    value={selectedBackup}
-                    onChange={(event) => setSelectedBackup(event.target.value)}
-                  >
-                    <option value="">復元するバックアップを選択</option>
-                    {backups.map((entry) => (
-                      <option key={entry.path} value={entry.path}>
-                        {entry.name} ({bytes(entry.byteSize)})
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    className="secondary compact"
-                    disabled={busy || !selectedBackup}
-                    onClick={() => void restoreBackup()}
-                  >
-                    選択したDBを復元
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-        </aside>
-        <section className="library-pane">
-          <header className="library-header">
-            <div>
-              <h1>ライブラリ</h1>
-              <p className="muted">{status.assetCount} アセット</p>
-            </div>
-            <input
-              className="search"
-              placeholder="名前・作者を検索"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </header>
-          {pendingFiles.length > 0 && (
-            <section className="import-bar">
-              <input
-                value={importTitle}
-                onChange={(event) => setImportTitle(event.target.value)}
-              />
-              <span>{pendingFiles.length} ファイル</span>
-              <button
-                className="secondary"
-                onClick={() => {
-                  setPendingFiles([]);
-                }}
-              >
-                キャンセル
-              </button>
-              <button
-                className="primary"
-                disabled={busy || !importTitle}
-                onClick={() => void importFiles()}
-              >
-                登録
-              </button>
-            </section>
-          )}
-          {message && <p className="success">{message}</p>}
-          {error && <p className="error">{error}</p>}
-          {(legacyProgress || legacyImportNotice) && (
-            <div className="legacy-progress-toast" role="status">
-              {legacyProgress ? (
-                <>
-                  <b>旧形式ZIPを取り込み中</b>
-                  <span>
-                    {legacyProgress.completed} / {legacyProgress.total} 件
-                  </span>
-                  <progress
-                    value={legacyProgress.completed}
-                    max={legacyProgress.total}
-                  />
-                </>
-              ) : (
-                <>
-                  <div className="legacy-progress-toast__head">
-                    <b>旧形式ZIPの取り込み完了</b>
-                    <button
-                      className="icon-button"
-                      aria-label="通知を閉じる"
-                      onClick={() => setLegacyImportNotice(null)}
-                    >
-                      <X aria-hidden="true" size={18} />
-                    </button>
-                  </div>
-                  <span>{legacyImportNotice}</span>
-                </>
-              )}
-            </div>
-          )}
-          <div className="asset-grid">
-            {filtered.map((asset) => (
-              <button
-                key={asset.id}
-                className={
-                  selected?.id === asset.id
-                    ? "asset-card selected"
-                    : "asset-card"
-                }
-                onClick={() => void select(asset.id)}
-              >
-                <div className="cover">
-                  {asset.coverDataUrl ? (
-                    <img src={asset.coverDataUrl} alt="" />
-                  ) : (
-                    "◇"
-                  )}
-                </div>
-                <b>{asset.title}</b>
-                <small>{asset.creator ?? "作者未設定"}</small>
-                <div className="chip-row">
-                  {asset.tags.map((tag) => (
-                    <span className="chip" key={tag.id}>
-                      {tag.name}
-                    </span>
-                  ))}
-                </div>
-              </button>
-            ))}
-          </div>
-          {!filtered.length && (
-            <div className="empty-state">
-              <span className="asset-icon">◇</span>
-              <h2>
-                {assets.length
-                  ? "一致するアセットはありません"
-                  : "まだアセットはありません"}
-              </h2>
-              <p>ファイルを追加して整理しましょう。</p>
-            </div>
-          )}
-        </section>
-        <aside className="detail-pane">
-          {!selected ? (
-            <div className="detail-empty">
-              アセットを選択すると詳細を編集できます。
-            </div>
-          ) : (
-            <>
-              <DetailEditor
-                detail={selected}
-                form={form}
-                setForm={setForm}
-                tags={tags}
-                categories={categories}
-                assets={assets}
-                relationTarget={relationTarget}
-                relationType={relationType}
-                setRelationTarget={setRelationTarget}
-                setRelationType={setRelationType}
-                busy={busy}
-                onClose={() => setSelected(null)}
-                onCover={setCover}
-                onAssign={assign}
-                onEntity={addEntity}
-                onReveal={(fileId) =>
-                  void invoke("reveal_asset_file", { fileId })
-                }
-                onDeleteFile={async (fileId) => {
-                  if (
-                    !(await confirmDialog(
-                      "ファイルを削除",
-                      "このファイルを削除しますか？",
-                    ))
-                  )
-                    return;
-                  await invoke("delete_asset_file", { fileId });
-                  await refresh();
-                  await select(selected.id);
-                }}
-                onAddFiles={async () => {
-                  const result = await open({
-                    multiple: true,
-                    title: "追加するファイルを選択",
-                  });
-                  const paths = Array.isArray(result)
-                    ? result
-                    : result
-                      ? [result]
-                      : [];
-                  if (!paths.length) return;
-                  await invoke("add_asset_files", {
-                    request: { assetId: selected.id, sourcePaths: paths },
-                  });
-                  await refresh();
-                  await select(selected.id);
-                }}
-                onUrl={(url) => void invoke("open_external_url", { url })}
-                onRelation={addRelation}
-                onSelect={(id) => void select(id)}
-              />
-              <div className="detail-bottom-actions">
-                <button
-                  className="primary compact"
-                  disabled={busy}
-                  onClick={save}
-                >
-                  <Save aria-hidden="true" size={18} /> 保存
-                </button>
-                <button
-                  className="secondary compact"
-                  onClick={async () => {
-                    if (
-                      !(await confirmDialog(
-                        "アセットを削除",
-                        "アセットと保存ファイルを削除しますか？",
-                      ))
-                    )
-                      return;
-                    await invoke("delete_asset", { assetId: selected.id });
-                    setSelected(null);
-                    await refresh();
-                  }}
-                >
-                  <Trash2 aria-hidden="true" size={18} /> アセットを削除
-                </button>
-              </div>
-            </>
-          )}
-        </aside>
+        <AssetSidebar
+          tags={tags}
+          categories={categories}
+          capacity={capacity}
+          backups={backups}
+          selectedBackup={selectedBackup}
+          categoryFilter={categoryFilter}
+          tagFilterIds={tagFilterIds}
+          tagSearch={tagSearch}
+          busy={busy}
+          onOpenAssetDialog={() => setAssetDialogOpen(true)}
+          onOpenLegacyImport={() => setLegacyImportOpen(true)}
+          onAddEntity={(kind) => void addEntity(kind)}
+          onCategoryFilter={setCategoryFilter}
+          onTagFilterIds={setTagFilterIds}
+          onTagSearch={setTagSearch}
+          onSelectBackup={setSelectedBackup}
+          onBackup={() => void backup()}
+          onRestore={() => void restoreBackup()}
+        />
+        <LibraryPane
+          status={status}
+          assets={assets}
+          filteredAssets={filtered}
+          selectedId={selected?.id ?? null}
+          query={query}
+          pendingFiles={pendingFiles}
+          importTitle={importTitle}
+          busy={busy}
+          message={message}
+          error={error}
+          legacyProgress={legacyProgress}
+          legacyImportNotice={legacyImportNotice}
+          setQuery={setQuery}
+          setImportTitle={setImportTitle}
+          onCancelImport={() => setPendingFiles([])}
+          onImport={() => void importFiles()}
+          onSelect={(id) => void select(id)}
+          onDismissLegacyNotice={() => setLegacyImportNotice(null)}
+        />
+        <AssetDetailPane
+          detail={selected}
+          form={form}
+          setForm={setForm}
+          tags={tags}
+          categories={categories}
+          assets={assets}
+          relationTarget={relationTarget}
+          relationType={relationType}
+          setRelationTarget={setRelationTarget}
+          setRelationType={setRelationType}
+          busy={busy}
+          onClose={() => setSelected(null)}
+          onCover={setCover}
+          onAssign={assign}
+          onEntity={addEntity}
+          onReveal={(fileId) => void invoke("reveal_asset_file", { fileId })}
+          onDeleteFile={async (fileId) => {
+            if (!(await confirmDialog("ファイルを削除", "このファイルを削除しますか？"))) return;
+            await invoke("delete_asset_file", { fileId });
+            await refresh();
+            if (selected) await select(selected.id);
+          }}
+          onAddFiles={async () => {
+            if (!selected) return;
+            const result = await open({ multiple: true, title: "追加するファイルを選択" });
+            const paths = Array.isArray(result) ? result : result ? [result] : [];
+            if (!paths.length) return;
+            await invoke("add_asset_files", { request: { assetId: selected.id, sourcePaths: paths } });
+            await refresh();
+            await select(selected.id);
+          }}
+          onUrl={(url) => void invoke("open_external_url", { url })}
+          onRelation={addRelation}
+          onSelect={(id) => void select(id)}
+          onSave={save}
+          onDeleteAsset={async () => {
+            if (!(await confirmDialog("アセットを削除", "アセットと保存ファイルを削除しますか？"))) return;
+            if (!selected) return;
+            await invoke("delete_asset", { assetId: selected.id });
+            setSelected(null);
+            await refresh();
+          }}
+        />
       </main>
       {assetDialogOpen && (
         <AssetDialog
