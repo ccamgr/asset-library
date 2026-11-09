@@ -58,6 +58,9 @@ body { margin: 0; min-width: 720px; min-height: 100vh; background: var(--color-c
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
+.lucide { color: var(--color-action); }
+.primary .lucide, .filter.active .lucide { color: var(--color-on-action); }
+.context-menu__item.destructive .lucide { color: var(--color-error-border); }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid #ffdc00;
   outline-offset: 2px;
@@ -185,7 +188,18 @@ textarea { min-height: 104px; resize: vertical; }
 }
 .asset-card:hover { border: 2px solid var(--color-action); padding: 11px; }
 .asset-card.selected { border: 3px solid var(--color-action); box-shadow: inset 0 0 0 1px var(--color-surface); padding: 10px; }
-.asset-card b { font-size: 1rem; line-height: 1.55; }
+.asset-card b {
+  display: -webkit-box;
+  font-size: 1rem;
+  line-height: 1.55;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  width: 100%;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .asset-card small { color: var(--color-muted); font-size: .8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cover { align-items: center; background: var(--color-placeholder); color: var(--color-muted); display: flex; font-size: 2rem; height: 148px; justify-content: center; overflow: hidden; }
 .cover img, .cover-editor img { height: 100%; object-fit: cover; width: 100%; }
