@@ -1799,22 +1799,22 @@ fn copy_database_snapshot(source_path: &Path, destination_path: &Path) -> Librar
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
-    #[cfg(target_os = "windows")]
-    return reveal_windows_file(path);
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg("-R").arg(path);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(path.parent().unwrap_or(path));
-        command
-    };
-    command.spawn()?;
+    reveal_windows_file(path)
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
+    Command::new("open").arg("-R").arg(path).spawn()?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
+    Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(path))
+        .spawn()?;
     Ok(())
 }
 
