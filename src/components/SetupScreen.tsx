@@ -2,7 +2,6 @@ type Props = {
   storagePath: string;
   backupPath: string;
   busy: boolean;
-  error: string | null;
   setStoragePath: (value: string) => void;
   setBackupPath: (value: string) => void;
   onChooseStorage: () => void;
@@ -14,7 +13,6 @@ export function SetupScreen({
   storagePath,
   backupPath,
   busy,
-  error,
   setStoragePath,
   setBackupPath,
   onChooseStorage,
@@ -44,7 +42,6 @@ export function SetupScreen({
           />
           <button className="secondary" onClick={onChooseBackup}>選択…</button>
         </div>
-        {error && <p className="error">{error}</p>}
         <button
           className="primary"
           disabled={busy || !storagePath || !backupPath}

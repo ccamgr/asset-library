@@ -12,6 +12,7 @@ import { LibraryPane } from "./components/LibraryPane";
 import { AssetSidebar } from "./components/AssetSidebar";
 import { AssetDetailPane } from "./components/AssetDetailPane";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { ToastStack } from "./components/ToastStack";
 import { Trash2 } from "lucide-react";
 import type {
   Asset,
@@ -214,6 +215,7 @@ function App() {
       label: "名前",
       initialValue: "",
       confirmLabel: "追加",
+      onError: reportFailure,
       onSubmit: async (name) => {
         await invoke(kind === "tag" ? "create_tag" : "create_category", {
           request: { name, color: null },
@@ -239,6 +241,7 @@ function App() {
                   label: "タグ名",
                   initialValue: tag.name,
                   confirmLabel: "変更",
+                  onError: reportFailure,
                   onSubmit: async (name) => {
                     await invoke("rename_tag", {
                       request: { id: tag.id, name },
@@ -357,21 +360,31 @@ function App() {
   if (!status) return <main className="loading">読み込み中…</main>;
   if (!status.initialized)
     return (
-      <SetupScreen
-        storagePath={storagePath}
-        backupPath={backupPath}
-        busy={busy}
-        error={error}
-        setStoragePath={setStoragePath}
-        setBackupPath={setBackupPath}
-        onChooseStorage={() =>
-          void chooseDirectory("アセット保存先", setStoragePath)
-        }
-        onChooseBackup={() =>
-          void chooseDirectory("DBバックアップ先", setBackupPath)
-        }
-        onInitialize={() => void initialize()}
-      />
+      <>
+        <SetupScreen
+          storagePath={storagePath}
+          backupPath={backupPath}
+          busy={busy}
+          setStoragePath={setStoragePath}
+          setBackupPath={setBackupPath}
+          onChooseStorage={() =>
+            void chooseDirectory("アセット保存先", setStoragePath)
+          }
+          onChooseBackup={() =>
+            void chooseDirectory("DBバックアップ先", setBackupPath)
+          }
+          onInitialize={() => void initialize()}
+        />
+        <ToastStack
+          message={message}
+          error={error}
+          legacyProgress={null}
+          legacyImportNotice={null}
+          onDismissMessage={() => setMessage(null)}
+          onDismissError={() => setError(null)}
+          onDismissLegacyNotice={() => undefined}
+        />
+      </>
     );
 
   return (
@@ -397,14 +410,9 @@ function App() {
           selectedId={selected?.id ?? null}
           query={query}
           busy={busy}
-          message={message}
-          error={error}
           hasMoreAssets={hasMoreAssets}
-          legacyProgress={legacyProgress}
-          legacyImportNotice={legacyImportNotice}
           setQuery={setQuery}
           onSelect={(id) => void select(id).catch(reportFailure)}
-          onDismissLegacyNotice={() => setLegacyImportNotice(null)}
           onLoadMore={() => void loadMoreAssets()}
         />
         <AssetDetailPane
@@ -449,11 +457,22 @@ function App() {
           }}
         />
       </main>
+      <ToastStack
+        message={message}
+        error={error}
+        legacyProgress={legacyProgress}
+        legacyImportNotice={legacyImportNotice}
+        onDismissMessage={() => setMessage(null)}
+        onDismissError={() => setError(null)}
+        onDismissLegacyNotice={() => setLegacyImportNotice(null)}
+        modalOpen={assetDialogOpen || assetEditDialogOpen || legacyImportOpen || settingsOpen}
+      />
       {assetDialogOpen && (
         <AssetDialog
           tags={tags}
           categories={categories}
           onClose={() => setAssetDialogOpen(false)}
+          onError={reportFailure}
           onDone={async (id, text) => {
             setAssetDialogOpen(false);
             setMessage(text);
@@ -468,6 +487,8 @@ function App() {
           tags={tags}
           categories={categories}
           onClose={() => setAssetEditDialogOpen(false)}
+          onError={reportFailure}
+          onAddTag={() => addEntity("tag")}
           onDone={async (text) => {
             setAssetEditDialogOpen(false);
             setMessage(text);
@@ -481,10 +502,11 @@ function App() {
           tags={tags}
           categories={categories}
           onClose={() => setLegacyImportOpen(false)}
+          onError={reportFailure}
           onStarted={(total) => setLegacyProgress({ completed: 0, total })}
         />
       )}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenLegacyImport={openLegacyImportFromSettings} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenLegacyImport={openLegacyImportFromSettings} onError={reportFailure} onMessage={setMessage} />}
     </div>
   );
 }

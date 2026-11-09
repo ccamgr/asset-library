@@ -1,6 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { X } from "lucide-react";
-import type { Asset, LegacyImportProgress, Status } from "../types";
+import type { Asset, Status } from "../types";
 
 type Props = {
   status: Status;
@@ -8,14 +7,9 @@ type Props = {
   selectedId: string | null;
   query: string;
   busy: boolean;
-  message: string | null;
-  error: string | null;
   hasMoreAssets: boolean;
-  legacyProgress: LegacyImportProgress | null;
-  legacyImportNotice: string | null;
   setQuery(value: string): void;
   onSelect(id: string): void;
-  onDismissLegacyNotice(): void;
   onLoadMore(): void;
 };
 
@@ -25,23 +19,15 @@ export function LibraryPane({
   selectedId,
   query,
   busy,
-  message,
-  error,
   hasMoreAssets,
-  legacyProgress,
-  legacyImportNotice,
   setQuery,
   onSelect,
-  onDismissLegacyNotice,
   onLoadMore,
 }: Props) {
   return (
     <section className="library-pane">
       <header className="library-header">
-        <div>
-          <h1>ライブラリ</h1>
-          <p className="muted">{status.assetCount} アセット</p>
-        </div>
+        <p className="muted">{status.assetCount} アセット</p>
         <input
           className="search"
           placeholder="名前・作者を検索"
@@ -49,29 +35,6 @@ export function LibraryPane({
           onChange={(event) => setQuery(event.target.value)}
         />
       </header>
-      {message && <p className="success">{message}</p>}
-      {error && <p className="error">{error}</p>}
-      {(legacyProgress || legacyImportNotice) && (
-        <div className="legacy-progress-toast" role="status">
-          {legacyProgress ? (
-            <>
-              <b>旧形式ZIPを取り込み中</b>
-              <span>{legacyProgress.completed} / {legacyProgress.total} 件</span>
-              <progress value={legacyProgress.completed} max={legacyProgress.total} />
-            </>
-          ) : (
-            <>
-              <div className="legacy-progress-toast__head">
-                <b>旧形式ZIPの取り込み完了</b>
-                <button className="icon-button" aria-label="通知を閉じる" onClick={onDismissLegacyNotice}>
-                  <X aria-hidden="true" size={18} />
-                </button>
-              </div>
-              <span>{legacyImportNotice}</span>
-            </>
-          )}
-        </div>
-      )}
       <div className="asset-grid">
         {assets.map((asset) => (
           <button

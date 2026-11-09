@@ -11,9 +11,10 @@ type Props = {
   categories: Category[];
   onClose: () => void;
   onDone: (id: string, text: string) => Promise<void>;
+  onError: (reason: string) => void;
 };
 
-export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
+export function AssetDialog({ tags, categories, onClose, onDone, onError }: Props) {
   const [files, setFiles] = useState<string[]>([]);
   const [title, setTitle] = useState("");
   const [creator, setCreator] = useState("");
@@ -24,7 +25,6 @@ export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const showOptional =
     localStorage.getItem("asset-library.show-optional-fields") === "true";
   const choose = async () => {
@@ -39,12 +39,12 @@ export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
         if (!title) setTitle(titleOf(paths[0]));
       }
     } catch (reason) {
-      setError(String(reason));
+      onError(String(reason));
     }
   };
   const submit = async () => {
     if (!title.trim() || !files.length) {
-      setError("アセット名とファイルを指定してください");
+      onError("アセット名とファイルを指定してください");
       return;
     }
     setBusy(true);
@@ -67,7 +67,7 @@ export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
       );
       await onDone(result.assetId, result.title + " を登録しました");
     } catch (reason) {
-      setError(String(reason));
+      onError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -161,7 +161,6 @@ export function AssetDialog({ tags, categories, onClose, onDone }: Props) {
           setTagIds={setTagIds}
           setCategoryIds={setCategoryIds}
         />
-        {error && <p className="error">{error}</p>}
         <div className="dialog-actions">
           <button className="secondary" disabled={busy} onClick={onClose}>
             キャンセル

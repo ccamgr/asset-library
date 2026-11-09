@@ -4,6 +4,7 @@ export type TextDialogOptions = {
   initialValue: string;
   confirmLabel: string;
   onSubmit: (value: string) => Promise<void>;
+  onError: (reason: unknown) => void;
 };
 
 /** A compact modal for a single text value, shared by context-menu actions. */
@@ -23,11 +24,8 @@ export function openTextDialog(options: TextDialogOptions) {
   label.textContent = options.label;
   const input = document.createElement("input");
   input.value = options.initialValue;
-  input.required = true;
   input.maxLength = 100;
   label.append(input);
-  const error = document.createElement("p");
-  error.className = "text-dialog__error";
   const actions = document.createElement("div");
   actions.className = "text-dialog__actions";
   const cancel = document.createElement("button");
@@ -39,7 +37,7 @@ export function openTextDialog(options: TextDialogOptions) {
   submit.className = "primary";
   submit.textContent = options.confirmLabel;
   actions.append(cancel, submit);
-  form.append(label, error, actions);
+  form.append(label, actions);
   dialog.append(title, form);
   backdrop.append(dialog);
 
@@ -54,15 +52,18 @@ export function openTextDialog(options: TextDialogOptions) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const value = input.value.trim();
-    if (!value) return;
+    if (!value) {
+      options.onError(`${options.label}を入力してください`);
+      input.focus();
+      return;
+    }
     submit.disabled = true;
     cancel.disabled = true;
-    error.textContent = "";
     try {
       await options.onSubmit(value);
       close();
     } catch (reason) {
-      error.textContent = String(reason);
+      options.onError(reason);
       submit.disabled = false;
       cancel.disabled = false;
       input.focus();

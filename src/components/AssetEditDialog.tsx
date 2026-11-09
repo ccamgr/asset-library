@@ -12,11 +12,13 @@ type Props = {
   categories: Category[];
   onClose(): void;
   onDone(text: string): Promise<void>;
+  onError(reason: string): void;
+  onAddTag(): void;
 };
 
 const optional = (value: string) => value.trim() || null;
 
-export function AssetEditDialog({ asset, tags, categories, onClose, onDone }: Props) {
+export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onError, onAddTag }: Props) {
   const [title, setTitle] = useState(asset.title);
   const [creator, setCreator] = useState(asset.creator ?? "");
   const [source, setSource] = useState(asset.source ?? "");
@@ -29,12 +31,11 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone }: Pr
   const [filesToAdd, setFilesToAdd] = useState<string[]>([]);
   const [fileIdsToDelete, setFileIdsToDelete] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const showOptional = localStorage.getItem("asset-library.show-optional-fields") === "true";
 
   const submit = async () => {
     if (!title.trim()) {
-      setError("アセット名を入力してください");
+      onError("アセット名を入力してください");
       return;
     }
     setBusy(true);
@@ -63,7 +64,7 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone }: Pr
       }
       await onDone(`${title.trim()} を保存しました`);
     } catch (reason) {
-      setError(String(reason));
+      onError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -77,7 +78,7 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone }: Pr
       });
       if (typeof result === "string") setCoverPath(result);
     } catch (reason) {
-      setError(String(reason));
+      onError(String(reason));
     }
   };
 
@@ -87,7 +88,7 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone }: Pr
       const paths = Array.isArray(result) ? result : result ? [result] : [];
       setFilesToAdd((current) => [...new Set([...current, ...paths])]);
     } catch (reason) {
-      setError(String(reason));
+      onError(String(reason));
     }
   };
 
@@ -107,7 +108,7 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone }: Pr
           {showOptional && <><label>配布元<input value={source} onChange={(event) => setSource(event.target.value)} /></label><label>バージョン<input value={version} onChange={(event) => setVersion(event.target.value)} /></label></>}
         </div>
         <label>メモ<textarea value={note} onChange={(event) => setNote(event.target.value)} /></label>
-        <AssetLabels tags={tags} categories={categories} tagIds={tagIds} categoryIds={categoryIds} setTagIds={setTagIds} setCategoryIds={setCategoryIds} />
+        <AssetLabels tags={tags} categories={categories} tagIds={tagIds} categoryIds={categoryIds} setTagIds={setTagIds} setCategoryIds={setCategoryIds} onAddTag={onAddTag} />
         <section className="file-select">
           <b>カバー画像</b>
           <button className="secondary compact" disabled={busy} onClick={() => void chooseCover()}>画像を選択</button>
@@ -130,7 +131,6 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone }: Pr
             {filesToAdd.map((path) => <li key={path}>{nameOf(path)}</li>)}
           </ul>
         </section>
-        {error && <p className="error">{error}</p>}
         <div className="dialog-actions">
           <button className="secondary" disabled={busy} onClick={onClose}>キャンセル</button>
           <button className="primary" disabled={busy} onClick={() => void submit()}>{busy ? "保存中…" : "保存"}</button>

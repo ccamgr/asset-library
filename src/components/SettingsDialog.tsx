@@ -8,15 +8,16 @@ import type { BackupEntry, Capacity } from "../types";
 type Props = {
   onClose(): void;
   onOpenLegacyImport(): void;
+  onError(reason: string): void;
+  onMessage(message: string): void;
 };
 
 type ThumbnailCacheRebuildResult = { generated: number; skipped: number };
 
-export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
+export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage }: Props) {
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [selected, setSelected] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showOptional, setShowOptional] = useState(
     () => localStorage.getItem("asset-library.show-optional-fields") === "true",
@@ -32,17 +33,17 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
   };
 
   useEffect(() => {
-    void refresh().catch((error) => setMessage(String(error)));
+    void refresh().catch((error) => onError(String(error)));
   }, []);
 
   const createBackup = async () => {
     setBusy(true);
     try {
       const result = await invoke<{ path: string }>("create_database_backup");
-      setMessage(`作成しました: ${result.path}`);
+      onMessage(`作成しました: ${result.path}`);
       await refresh();
     } catch (error) {
-      setMessage(String(error));
+      onError(String(error));
     } finally {
       setBusy(false);
     }
@@ -59,10 +60,10 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
     setBusy(true);
     try {
       await invoke("restore_database_backup", { backupPath: selected });
-      setMessage("復元しました");
+      onMessage("復元しました");
       await refresh();
     } catch (error) {
-      setMessage(String(error));
+      onError(String(error));
     } finally {
       setBusy(false);
     }
@@ -72,14 +73,14 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
     setBusy(true);
     try {
       const result = await invoke<ThumbnailCacheRebuildResult>("rebuild_thumbnail_cache");
-      setMessage(
+      onMessage(
         result.skipped
           ? `${result.generated}件のサムネイルを再生成しました（${result.skipped}件をスキップ）`
           : `${result.generated}件のサムネイルを再生成しました`,
       );
       await refresh();
     } catch (error) {
-      setMessage(String(error));
+      onError(String(error));
     } finally {
       setBusy(false);
     }
@@ -137,7 +138,6 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
             配布元・バージョンを表示
           </label>
         </section>
-        {message && <p className="hint">{message}</p>}
       </section>
     </div>
   );

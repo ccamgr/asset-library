@@ -10,6 +10,7 @@ type Props = {
   categories: Category[];
   onClose: () => void;
   onStarted: (total: number) => void;
+  onError: (reason: string) => void;
 };
 
 export function LegacyImportDialog({
@@ -17,12 +18,12 @@ export function LegacyImportDialog({
   categories,
   onClose,
   onStarted,
+  onError,
 }: Props) {
   const [folders, setFolders] = useState<string[]>([]);
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const choose = async () => {
     try {
       const result = await open({
@@ -33,12 +34,12 @@ export function LegacyImportDialog({
       const paths = Array.isArray(result) ? result : result ? [result] : [];
       setFolders((current) => [...new Set([...current, ...paths])]);
     } catch (reason) {
-      setError(String(reason));
+      onError(String(reason));
     }
   };
   const submit = async () => {
     if (!folders.length) {
-      setError("フォルダを指定してください");
+      onError("フォルダを指定してください");
       return;
     }
     setBusy(true);
@@ -50,7 +51,7 @@ export function LegacyImportDialog({
       );
       const total = counts.reduce((a, b) => a + b, 0);
       if (!total) {
-        setError("指定フォルダ直下にZIPがありません");
+        onError("指定フォルダ直下にZIPがありません");
         return;
       }
       if (
@@ -67,7 +68,7 @@ export function LegacyImportDialog({
       onStarted(total);
       onClose();
     } catch (reason) {
-      setError(String(reason));
+      onError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -114,7 +115,6 @@ export function LegacyImportDialog({
           setTagIds={setTagIds}
           setCategoryIds={setCategoryIds}
         />
-        {error && <p className="error">{error}</p>}
         <div className="dialog-actions">
           <button className="secondary" disabled={busy} onClick={onClose}>
             キャンセル

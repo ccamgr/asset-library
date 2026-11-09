@@ -15,7 +15,10 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use rusqlite::{params, types::Value, Connection};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow, Window,
+    WindowEvent,
+};
 use thiserror::Error;
 use uuid::Uuid;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
@@ -45,6 +48,18 @@ type LibraryResult<T> = Result<T, LibraryError>;
 struct AppSettings {
     asset_storage_path: Option<PathBuf>,
     database_backup_path: Option<PathBuf>,
+    #[serde(default)]
+    window_state: Option<WindowState>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowState {
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    maximized: bool,
 }
 
 struct AppState {
@@ -86,6 +101,79 @@ impl AppState {
         fs::write(&temporary_path, contents)?;
         fs::rename(temporary_path, &self.config_path)?;
         Ok(())
+    }
+}
+
+fn restore_window_state(window: &WebviewWindow, state: &AppState) -> LibraryResult<()> {
+    let window_state = state
+        .settings
+        .lock()
+        .map_err(|_| LibraryError::Message("設定のロックに失敗しました".into()))?
+        .window_state
+        .clone();
+
+    let Some(window_state) = window_state else {
+        return Ok(());
+    };
+    if window_state.width == 0 || window_state.height == 0 {
+        return Ok(());
+    }
+
+    window
+        .set_size(PhysicalSize::new(window_state.width, window_state.height))
+        .map_err(|error| {
+            LibraryError::Message(format!("ウィンドウサイズを復元できません: {error}"))
+        })?;
+    let center_x = window_state
+        .x
+        .saturating_add((window_state.width / 2).min(i32::MAX as u32) as i32);
+    let center_y = window_state
+        .y
+        .saturating_add((window_state.height / 2).min(i32::MAX as u32) as i32);
+    if window
+        .monitor_from_point(center_x as f64, center_y as f64)
+        .map_err(|error| LibraryError::Message(format!("画面を確認できません: {error}")))?
+        .is_some()
+    {
+        window
+            .set_position(PhysicalPosition::new(window_state.x, window_state.y))
+            .map_err(|error| {
+                LibraryError::Message(format!("ウィンドウ位置を復元できません: {error}"))
+            })?;
+    }
+    if window_state.maximized {
+        window.maximize().map_err(|error| {
+            LibraryError::Message(format!("ウィンドウを最大化できません: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
+fn save_window_state(window: &Window) {
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(maximized) = window.is_maximized() else {
+        return;
+    };
+    let Some(state) = window.app_handle().try_state::<AppState>() else {
+        return;
+    };
+    let Ok(mut settings) = state.settings.lock() else {
+        return;
+    };
+    settings.window_state = Some(WindowState {
+        width: size.width,
+        height: size.height,
+        x: position.x,
+        y: position.y,
+        maximized,
+    });
+    if let Err(error) = state.save_settings(&settings) {
+        eprintln!("failed to save window state: {error}");
     }
 }
 
@@ -1726,7 +1814,7 @@ fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = Command::new("explorer.exe");
-        command.arg(format!("/select,{}", display_path(path)));
+        command.arg(format!("/select,\"{}\"", display_path(path)));
         command
     };
     #[cfg(target_os = "macos")]
@@ -2482,7 +2570,21 @@ pub fn run() {
             allow_cover_paths(app.handle(), &library_root, &asset_storage_root)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             app.manage(state);
+            let window = app
+                .get_webview_window("main")
+                .ok_or_else(|| LibraryError::Message("メインウィンドウを取得できません".into()))?;
+            let state = app.state::<AppState>();
+            restore_window_state(&window, &state)
+                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            window
+                .show()
+                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::CloseRequested { .. }) {
+                save_window_state(window);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_library_status,
@@ -2535,6 +2637,16 @@ mod tests {
         assert_eq!(count_assets(&database_path).unwrap(), 0);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn settings_without_window_state_remain_supported() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"assetStoragePath":"C:/assets","databaseBackupPath":"C:/backups"}"#,
+        )
+        .expect("older settings should deserialize");
+
+        assert!(settings.window_state.is_none());
     }
 
     #[test]
