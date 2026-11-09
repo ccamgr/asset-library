@@ -111,16 +111,29 @@ pub(crate) fn reveal_asset_directory(
     state: State<'_, AppState>,
     asset_id: String,
 ) -> Result<(), String> {
-    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let directory = asset_files_directory(&locations.asset_storage_root, &asset_id)
-        .map_err(|error| error.to_string())?;
-    if !directory.is_dir() {
-        return Err("アセットの保存先が見つかりません".into());
-    }
+    let log_path = state.log_path.clone();
     state.log(format!(
-        "asset directory reveal started asset_id={asset_id} path={directory:?}"
+        "asset directory reveal requested asset_id={asset_id}"
     ));
-    open_directory_in_file_manager(&directory).map_err(|error| error.to_string())
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
+    let file_id: String = connection
+        .query_row(
+            "SELECT id FROM asset_files WHERE asset_id=?1 ORDER BY created_at, id LIMIT 1",
+            params![&asset_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let path = get_asset_file_path(app, state, file_id)?;
+    let directory = Path::new(&path)
+        .parent()
+        .ok_or_else(|| "ファイルの親フォルダを取得できません".to_string())?;
+    append_log(
+        &log_path,
+        &format!("asset directory reveal started asset_id={asset_id} path={directory:?}"),
+    );
+    open_directory_in_file_manager(directory).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

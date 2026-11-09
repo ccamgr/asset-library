@@ -445,7 +445,7 @@ function App() {
           busy={busy}
           onClose={() => setSelected(null)}
           onEdit={() => setAssetEditDialogOpen(true)}
-          onReveal={async (assetId) => {
+          onRevealDirectory={async (assetId) => {
             setBusy(true);
             try {
               await invoke("reveal_asset_directory", { assetId });
