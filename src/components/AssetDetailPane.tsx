@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronUp, ExternalLink, FolderOpen, Pencil, Trash2, X } from "lucide-react";
 import type { Detail } from "../types";
 import { bytes } from "../lib/utils";
@@ -35,7 +36,7 @@ export function AssetDetailPane({ detail, busy, onClose, onEdit, onDeleteAsset, 
           <button className="icon-button" aria-label="詳細を閉じる" onClick={onClose}><X aria-hidden="true" size={20} /></button>
         </div>
       </div>
-      <div className="cover-editor">{detail.coverDataUrl ? <img src={detail.coverDataUrl} alt="カバー" /> : "カバー画像なし"}</div>
+      <div className="cover-editor">{detail.coverPath ? <img src={convertFileSrc(detail.coverPath)} alt="カバー" /> : "カバー画像なし"}</div>
       <section className="detail-section detail-summary">
         <h3>{detail.title}</h3>
         <p>{detail.creator ?? "作者未設定"}</p>

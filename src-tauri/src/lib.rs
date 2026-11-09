@@ -11,7 +11,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use rusqlite::{params, types::Value, Connection};
 use serde::{Deserialize, Serialize};
@@ -318,7 +317,7 @@ struct AssetDetail {
     product_url: Option<String>,
     version: Option<String>,
     note: Option<String>,
-    cover_data_url: Option<String>,
+    cover_path: Option<String>,
     tags: Vec<Tag>,
     categories: Vec<Category>,
     files: Vec<AssetFileView>,
@@ -763,8 +762,13 @@ fn get_asset_detail(
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
     let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
         .map_err(|error| error.to_string())?;
-    asset_detail(&connection, &locations.asset_storage_root, &asset_id)
-        .map_err(|error| error.to_string())
+    asset_detail(
+        &connection,
+        &locations.library_root,
+        &locations.asset_storage_root,
+        &asset_id,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1565,7 +1569,8 @@ fn categories_for_assets(
 
 fn asset_detail(
     connection: &Connection,
-    asset_root: &Path,
+    library_root: &Path,
+    asset_storage_root: &Path,
     asset_id: &str,
 ) -> LibraryResult<AssetDetail> {
     let (id, title, creator, source, product_url, version, note, cover_path): (String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = connection.query_row(
@@ -1619,28 +1624,23 @@ fn asset_detail(
         product_url,
         version,
         note,
-        cover_data_url: cover_path.and_then(|path| cover_data_url(asset_root, &path)),
+        cover_path: cover_path.and_then(|path| {
+            cached_thumbnail_path(library_root, asset_storage_root, asset_id, &path)
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    generate_cached_thumbnail(library_root, asset_storage_root, asset_id, &path)
+                        .ok()?;
+                    cached_thumbnail_path(library_root, asset_storage_root, asset_id, &path)
+                        .ok()
+                        .flatten()
+                })
+        }),
         tags: tags_for_asset(connection, asset_id)?,
         categories,
         files,
         relations,
     })
-}
-
-fn cover_data_url(asset_root: &Path, relative_path: &str) -> Option<String> {
-    let extension = Path::new(relative_path)
-        .extension()?
-        .to_str()?
-        .to_ascii_lowercase();
-    let mime = match extension.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        _ => return None,
-    };
-    let bytes = fs::read(asset_root.join(relative_path)).ok()?;
-    Some(format!("data:{mime};base64,{}", BASE64.encode(bytes)))
 }
 
 fn thumbnail_cache_path(library_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
@@ -1814,7 +1814,7 @@ fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = Command::new("explorer.exe");
-        command.arg(format!("/select,\"{}\"", display_path(path)));
+        command.arg("/select,").arg(display_path(path));
         command
     };
     #[cfg(target_os = "macos")]

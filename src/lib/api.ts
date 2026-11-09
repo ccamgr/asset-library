@@ -49,7 +49,7 @@ const assets: AnyRecord[] = mockAssets.map(([title, creator, category], index) =
     productUrl: `https://booth.pm/ja/items/${1000 + index}`,
     version: index % 3 === 0 ? "1.1.0" : "1.0.0",
     note: index === 0 ? "モックデータ" : "ブラウザプレビュー用のサンプルアセット",
-    coverDataUrl: null,
+    coverPath: null,
     tags: category ? [tags[0], ...(index % 2 === 0 ? [tags[1]] : [])] : [],
     categories: [categories[category]],
     files: [
@@ -67,7 +67,7 @@ const summary = (asset: AnyRecord) => ({
   id: asset.id,
   title: asset.title,
   creator: asset.creator,
-  coverPath: asset.coverDataUrl,
+  coverPath: asset.coverPath,
   tags: asset.tags,
   categories: asset.categories,
   searchText: [
@@ -142,7 +142,7 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
         productUrl: data.productUrl ?? null,
         version: data.version ?? null,
         note: data.note ?? null,
-        coverDataUrl: null,
+        coverPath: null,
         tags: tags.filter((tag) => (data.tagIds ?? []).includes(tag.id)),
         categories: categories.filter((category) =>
           (data.categoryIds ?? []).includes(category.id),

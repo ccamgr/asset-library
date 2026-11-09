@@ -36,7 +36,7 @@ export type Detail = {
   productUrl: string | null;
   version: string | null;
   note: string | null;
-  coverDataUrl: string | null;
+  coverPath: string | null;
   tags: Tag[];
   categories: Category[];
   files: FileItem[];
