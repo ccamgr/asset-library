@@ -1801,13 +1801,7 @@ fn copy_database_snapshot(source_path: &Path, destination_path: &Path) -> Librar
 
 fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
     #[cfg(target_os = "windows")]
-    let mut command = {
-        use std::os::windows::process::CommandExt;
-
-        let mut command = Command::new("explorer.exe");
-        command.raw_arg(format!("/select,\"{}\"", display_path(path)));
-        command
-    };
+    return reveal_windows_file(path);
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = Command::new("open");
@@ -1822,6 +1816,111 @@ fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
     };
     command.spawn()?;
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_windows_file(path: &Path) -> LibraryResult<()> {
+    use std::ptr;
+
+    let path = path.canonicalize()?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| LibraryError::Message("ファイルの親フォルダを取得できません".into()))?;
+    let initialize_result = unsafe { windows_shell::co_initialize(ptr::null()) };
+    let folder = windows_shell::item_id_list(parent)?;
+    let item = match windows_shell::item_id_list(&path) {
+        Ok(item) => item,
+        Err(error) => {
+            unsafe { windows_shell::free_item_id_list(folder) };
+            if initialize_result >= 0 {
+                unsafe { windows_shell::co_uninitialize() };
+            }
+            return Err(error);
+        }
+    };
+    let child = unsafe { windows_shell::last_item_id(item) };
+    let result = unsafe { windows_shell::open_folder_and_select(folder, child) };
+    unsafe {
+        windows_shell::free_item_id_list(item);
+        windows_shell::free_item_id_list(folder);
+    }
+    if initialize_result >= 0 {
+        unsafe { windows_shell::co_uninitialize() };
+    }
+    result
+}
+
+#[cfg(target_os = "windows")]
+mod windows_shell {
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+
+    use super::{LibraryError, LibraryResult};
+
+    #[repr(C)]
+    pub(super) struct ItemIdList {
+        _private: [u8; 0],
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ILCreateFromPathW(path: *const u16) -> *mut ItemIdList;
+        fn ILFindLastID(item_id_list: *const ItemIdList) -> *const ItemIdList;
+        fn ILFree(item_id_list: *const ItemIdList);
+        fn SHOpenFolderAndSelectItems(
+            folder: *const ItemIdList,
+            count: u32,
+            items: *const *const ItemIdList,
+            flags: u32,
+        ) -> i32;
+    }
+
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitialize(reserved: *const core::ffi::c_void) -> i32;
+        fn CoUninitialize();
+    }
+
+    fn wide_path(path: &OsStr) -> Vec<u16> {
+        path.encode_wide().chain(Some(0)).collect()
+    }
+
+    pub(super) unsafe fn co_initialize(reserved: *const core::ffi::c_void) -> i32 {
+        unsafe { CoInitialize(reserved) }
+    }
+
+    pub(super) unsafe fn co_uninitialize() {
+        unsafe { CoUninitialize() }
+    }
+
+    pub(super) fn item_id_list(path: &std::path::Path) -> LibraryResult<*mut ItemIdList> {
+        let path = wide_path(path.as_os_str());
+        let item_id_list = unsafe { ILCreateFromPathW(path.as_ptr()) };
+        if item_id_list.is_null() {
+            return Err(LibraryError::Io(std::io::Error::last_os_error()));
+        }
+        Ok(item_id_list)
+    }
+
+    pub(super) unsafe fn last_item_id(item_id_list: *const ItemIdList) -> *const ItemIdList {
+        unsafe { ILFindLastID(item_id_list) }
+    }
+
+    pub(super) unsafe fn free_item_id_list(item_id_list: *const ItemIdList) {
+        unsafe { ILFree(item_id_list) };
+    }
+
+    pub(super) unsafe fn open_folder_and_select(
+        folder: *const ItemIdList,
+        item: *const ItemIdList,
+    ) -> LibraryResult<()> {
+        let result = unsafe { SHOpenFolderAndSelectItems(folder, 1, &item, 0) };
+        if result < 0 {
+            return Err(LibraryError::Message(format!(
+                "エクスプローラーでファイルを選択できません ({result:#010x})"
+            )));
+        }
+        Ok(())
+    }
 }
 
 fn open_with_default_application(target: &str) -> LibraryResult<()> {
