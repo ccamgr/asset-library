@@ -49,6 +49,7 @@ type LibraryResult<T> = Result<T, LibraryError>;
 struct AppSettings {
     asset_storage_path: Option<PathBuf>,
     database_backup_path: Option<PathBuf>,
+    database_path: Option<PathBuf>,
     #[serde(default)]
     window_state: Option<WindowState>,
 }
@@ -199,9 +200,11 @@ struct LibraryStatus {
     default_library_path: String,
     default_asset_storage_path: String,
     default_database_backup_path: String,
+    default_database_path: String,
     selected_library_path: Option<String>,
     asset_storage_path: Option<String>,
     database_backup_path: Option<String>,
+    database_path: Option<String>,
     initialized: bool,
     asset_count: i64,
 }
@@ -211,6 +214,8 @@ struct LibraryStatus {
 struct InitializeLibraryRequest {
     asset_storage_path: String,
     database_backup_path: String,
+    #[serde(default)]
+    database_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -434,6 +439,7 @@ struct StorageLocations {
     library_root: PathBuf,
     asset_storage_root: PathBuf,
     database_backup_root: PathBuf,
+    database_path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -454,7 +460,10 @@ fn get_library_status(app: AppHandle, state: State<'_, AppState>) -> Result<Libr
         .lock()
         .map_err(|_| "設定のロックに失敗しました".to_string())?
         .clone();
-    let database_path = default_library_path.join(DATABASE_FILE);
+    let database_path = settings
+        .database_path
+        .clone()
+        .unwrap_or_else(|| default_library_path.join(DATABASE_FILE));
     let asset_storage_path = settings
         .asset_storage_path
         .unwrap_or_else(|| default_asset_storage_path.clone());
@@ -472,9 +481,11 @@ fn get_library_status(app: AppHandle, state: State<'_, AppState>) -> Result<Libr
         default_library_path: display_path(&default_library_path),
         default_asset_storage_path: display_path(&default_asset_storage_path),
         default_database_backup_path: display_path(&default_database_backup_path),
+        default_database_path: display_path(&default_library_path.join(DATABASE_FILE)),
         selected_library_path: Some(display_path(&default_library_path)),
         asset_storage_path: Some(display_path(&asset_storage_path)),
         database_backup_path: Some(display_path(&database_backup_path)),
+        database_path: Some(display_path(&database_path)),
         initialized,
         asset_count,
     })
@@ -492,8 +503,21 @@ fn initialize_library(
     let database_backup_path =
         validate_storage_path(&request.database_backup_path, "DBバックアップ先")
             .map_err(|error| error.to_string())?;
-    prepare_library(&library_path, &asset_storage_path, &database_backup_path)
-        .map_err(|error| error.to_string())?;
+    let database_path = request
+        .database_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| validate_database_path(path))
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| library_path.join(DATABASE_FILE));
+    prepare_library(
+        &library_path,
+        &database_path,
+        &asset_storage_path,
+        &database_backup_path,
+    )
+    .map_err(|error| error.to_string())?;
     allow_cover_paths(&app, &library_path, &asset_storage_path)
         .map_err(|error| error.to_string())?;
 
@@ -503,11 +527,13 @@ fn initialize_library(
         .map_err(|_| "設定のロックに失敗しました".to_string())?;
     settings.asset_storage_path = Some(asset_storage_path.clone());
     settings.database_backup_path = Some(database_backup_path.clone());
+    settings.database_path = Some(database_path.clone());
     state
         .save_settings(&settings)
         .map_err(|error| error.to_string())?;
     state.log(format!(
-        "library initialized asset_storage={} database_backups={}",
+        "library initialized database={} asset_storage={} database_backups={}",
+        display_path(&database_path),
         display_path(&asset_storage_path),
         display_path(&database_backup_path)
     ));
@@ -529,6 +555,9 @@ fn import_files(
     let asset_storage_path = settings
         .asset_storage_path
         .unwrap_or_else(|| library_path.join("assets"));
+    let database_path = settings
+        .database_path
+        .unwrap_or_else(|| library_path.join(DATABASE_FILE));
 
     let tag_ids = request.tag_ids.clone();
     let category_ids = request.category_ids.clone();
@@ -537,19 +566,12 @@ fn import_files(
     state.log(format!(
         "asset import started title={title:?} files={file_count}"
     ));
-    let result = import_into_library(&library_path, &asset_storage_path, request)
+    let result = import_into_library(&database_path, &asset_storage_path, request)
         .map_err(|error| error.to_string())?;
-    if let Err(error) = assign_import_labels(
-        &library_path.join(DATABASE_FILE),
-        &result.asset_id,
-        &tag_ids,
-        &category_ids,
-    ) {
-        let _ = remove_imported_asset(
-            &library_path.join(DATABASE_FILE),
-            &asset_storage_path,
-            &result.asset_id,
-        );
+    if let Err(error) =
+        assign_import_labels(&database_path, &result.asset_id, &tag_ids, &category_ids)
+    {
+        let _ = remove_imported_asset(&database_path, &asset_storage_path, &result.asset_id);
         state.log(format!(
             "asset import failed asset_id={} reason={error}",
             result.asset_id
@@ -647,13 +669,13 @@ fn import_legacy_batch(
         match import_legacy_archive(locations, &archive) {
             Ok(result) => {
                 if let Err(error) = assign_import_labels(
-                    &locations.library_root.join(DATABASE_FILE),
+                    &locations.database_path,
                     &result.asset_id,
                     &request.tag_ids,
                     &request.category_ids,
                 ) {
                     let _ = remove_imported_asset(
-                        &locations.library_root.join(DATABASE_FILE),
+                        &locations.database_path,
                         &locations.asset_storage_root,
                         &result.asset_id,
                     );
@@ -732,8 +754,8 @@ fn list_assets(
     offset: Option<usize>,
 ) -> Result<Vec<AssetSummary>, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let search = format!("%{}%", query.unwrap_or_default().trim());
     let limit = limit.unwrap_or(100).clamp(1, 200) as i64;
     let offset = offset.unwrap_or(0) as i64;
@@ -833,8 +855,8 @@ fn get_asset_detail(
     asset_id: String,
 ) -> Result<AssetDetail, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     asset_detail(
         &connection,
         &locations.library_root,
@@ -855,8 +877,8 @@ fn update_asset(
         return Err("アセット名を入力してください".into());
     }
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let changed = connection
         .execute(
             "UPDATE assets SET title=?2, creator=?3, source=?4, product_url=?5,
@@ -883,8 +905,8 @@ fn update_asset(
 #[tauri::command]
 fn list_tags(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Tag>, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     all_tags(&connection).map_err(|error| error.to_string())
 }
 
@@ -896,8 +918,8 @@ fn create_tag(
 ) -> Result<Tag, String> {
     let name = non_empty_name(&request.name).map_err(|error| error.to_string())?;
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let id = Uuid::now_v7().to_string();
     connection
         .execute(
@@ -923,8 +945,8 @@ fn create_tag(
 #[tauri::command]
 fn delete_tag(app: AppHandle, state: State<'_, AppState>, tag_id: String) -> Result<(), String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| error.to_string())?;
@@ -941,8 +963,8 @@ fn delete_category(
     category_id: String,
 ) -> Result<(), String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let mut connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let mut connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|error| error.to_string())?;
@@ -971,8 +993,8 @@ fn rename_tag(
 ) -> Result<(), String> {
     let name = non_empty_name(&request.name).map_err(|error| error.to_string())?;
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let changed = connection
         .execute(
             "UPDATE tags SET name=?1 WHERE id=?2",
@@ -993,7 +1015,7 @@ fn delete_asset(
 ) -> Result<(), String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
     remove_imported_asset(
-        &locations.library_root.join(DATABASE_FILE),
+        &locations.database_path,
         &locations.asset_storage_root,
         &asset_id,
     )
@@ -1012,7 +1034,7 @@ fn add_asset_files(
         return Err("少なくとも1つのファイルを選んでください".into());
     }
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let database_path = locations.library_root.join(DATABASE_FILE);
+    let database_path = locations.database_path.clone();
     let destination = asset_files_directory(&locations.asset_storage_root, &request.asset_id)
         .map_err(|error| error.to_string())?;
     let connection = Connection::open(&database_path).map_err(|error| error.to_string())?;
@@ -1092,7 +1114,7 @@ fn delete_asset_file(
     file_id: String,
 ) -> Result<(), String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let database_path = locations.library_root.join(DATABASE_FILE);
+    let database_path = locations.database_path.clone();
     let connection = Connection::open(&database_path).map_err(|error| error.to_string())?;
     let (asset_id, storage_mode, relative): (String, String, Option<String>) = connection
         .query_row(
@@ -1138,8 +1160,8 @@ fn set_asset_tags(
     request: AssetAssignmentRequest,
 ) -> Result<(), String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let mut connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let mut connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -1163,8 +1185,8 @@ fn set_asset_tags(
 #[tauri::command]
 fn list_categories(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Category>, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     all_categories(&connection).map_err(|error| error.to_string())
 }
 
@@ -1176,8 +1198,8 @@ fn create_category(
 ) -> Result<Category, String> {
     let name = non_empty_name(&request.name).map_err(|error| error.to_string())?;
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let category = Category {
         id: Uuid::now_v7().to_string(),
         parent_id: None,
@@ -1203,8 +1225,8 @@ fn set_asset_categories(
         return Err("カテゴリはアセットごとに1つだけ設定できます".into());
     }
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let mut connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let mut connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -1246,8 +1268,8 @@ fn add_asset_relation(
         return Err("不正な関連タイプです".into());
     }
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     connection.execute("INSERT OR REPLACE INTO asset_relations (source_asset_id, target_asset_id, relation_type, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5)", params![request.source_asset_id, request.target_asset_id, request.relation_type, optional_text(request.note), unix_timestamp()]).map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -1259,8 +1281,8 @@ fn remove_asset_relation(
     request: RemoveRelationRequest,
 ) -> Result<(), String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     connection.execute("DELETE FROM asset_relations WHERE source_asset_id=?1 AND target_asset_id=?2 AND relation_type=?3", params![request.source_asset_id, request.target_asset_id, request.relation_type]).map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -1281,7 +1303,7 @@ fn set_asset_cover(
         .ok_or_else(|| "PNG、JPEG、WebP、GIF画像を選んでください".to_string())?;
     let relative_path = format!("assets/{asset_id}/cover.{extension}");
     let destination = locations.asset_storage_root.join(&relative_path);
-    let old_path: Option<String> = Connection::open(locations.library_root.join(DATABASE_FILE))
+    let old_path: Option<String> = Connection::open(&locations.database_path)
         .map_err(|error| error.to_string())?
         .query_row(
             "SELECT cover_path FROM assets WHERE id=?1",
@@ -1296,8 +1318,8 @@ fn set_asset_cover(
     )
     .map_err(|error| error.to_string())?;
     fs::copy(&source_path, &destination).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     connection
         .execute(
             "UPDATE assets SET cover_path=?2, updated_at=?3 WHERE id=?1",
@@ -1321,8 +1343,8 @@ fn get_asset_file_path(
     file_id: String,
 ) -> Result<String, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let (storage_mode, relative_path, external_path): (String, Option<String>, Option<String>) =
         connection
             .query_row(
@@ -1406,8 +1428,8 @@ fn rebuild_thumbnail_cache(
     }
     fs::create_dir_all(&cache_root).map_err(|error| error.to_string())?;
 
-    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
-        .map_err(|error| error.to_string())?;
+    let connection =
+        Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let mut statement = connection
         .prepare("SELECT id, cover_path FROM assets WHERE cover_path IS NOT NULL")
         .map_err(|error| error.to_string())?;
@@ -1447,7 +1469,7 @@ fn create_database_backup(
         .database_backup_root
         .join(format!("library-{created_at}-{}.db", Uuid::now_v7()));
     let temporary_path = backup_path.with_extension("db.partial");
-    copy_database_snapshot(&locations.library_root.join(DATABASE_FILE), &temporary_path)
+    copy_database_snapshot(&locations.database_path, &temporary_path)
         .map_err(|error| error.to_string())?;
     fs::rename(&temporary_path, &backup_path).map_err(|error| error.to_string())?;
     Ok(BackupResult {
@@ -1502,7 +1524,7 @@ fn restore_database_backup(
     {
         return Err("指定されたDBバックアップを復元できません".into());
     }
-    copy_database_snapshot(&backup_file, &locations.library_root.join(DATABASE_FILE))
+    copy_database_snapshot(&backup_file, &locations.database_path)
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -1532,6 +1554,9 @@ fn storage_locations(
         database_backup_root: settings
             .database_backup_path
             .unwrap_or_else(|| library_root.join("database-backups")),
+        database_path: settings
+            .database_path
+            .unwrap_or_else(|| library_root.join(DATABASE_FILE)),
         library_root,
     })
 }
@@ -1960,9 +1985,11 @@ fn validated_asset_id(asset_id: &str) -> LibraryResult<&str> {
 }
 
 fn asset_directory(asset_storage_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
-    Ok(asset_storage_root
-        .join("assets")
-        .join(validated_asset_id(asset_id)?))
+    let asset_id = validated_asset_id(asset_id)?;
+    let shard = asset_id
+        .get(asset_id.len().saturating_sub(2)..)
+        .ok_or_else(|| LibraryError::Message("アセットIDが不正です".into()))?;
+    Ok(asset_storage_root.join("assets").join(shard).join(asset_id))
 }
 
 fn asset_files_directory(asset_storage_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
@@ -1977,6 +2004,7 @@ fn cleanup_added_files(destination: &Path, files: &[ImportedFile]) {
 
 fn prepare_library(
     root: &Path,
+    database_path: &Path,
     asset_storage_root: &Path,
     database_backup_root: &Path,
 ) -> LibraryResult<()> {
@@ -1985,14 +2013,27 @@ fn prepare_library(
     }
     fs::create_dir_all(asset_storage_root.join("assets"))?;
     fs::create_dir_all(database_backup_root)?;
-    let database_path = root.join(DATABASE_FILE);
+    let database_parent = database_path
+        .parent()
+        .ok_or_else(|| LibraryError::Message("DBファイルの保存先が不正です".into()))?;
+    fs::create_dir_all(database_parent)?;
     let mut connection = Connection::open(database_path)?;
     migrate(&mut connection)?;
     Ok(())
 }
 
+fn validate_database_path(value: &str) -> LibraryResult<PathBuf> {
+    let path = PathBuf::from(value.trim());
+    if path.file_name().and_then(|name| name.to_str()) != Some(DATABASE_FILE) {
+        return Err(LibraryError::Message(format!(
+            "DBファイル名は {DATABASE_FILE} を指定してください"
+        )));
+    }
+    Ok(path)
+}
+
 fn import_into_library(
-    root: &Path,
+    database_path: &Path,
     asset_storage_root: &Path,
     request: ImportRequest,
 ) -> LibraryResult<ImportResult> {
@@ -2011,7 +2052,6 @@ fn import_into_library(
         ));
     }
 
-    let database_path = root.join(DATABASE_FILE);
     if !database_path.is_file() {
         return Err(LibraryError::Message(
             "ライブラリが初期化されていません".into(),
@@ -2052,7 +2092,7 @@ fn import_into_library(
             });
         }
 
-        let asset_directory = asset_storage_root.join("assets").join(&asset_id);
+        let asset_directory = asset_directory(asset_storage_root, &asset_id)?;
         copy_staged_asset(&staging_asset_dir, &asset_directory, &files, None)?;
 
         let database_result =
@@ -2080,7 +2120,7 @@ fn import_legacy_archive(
     locations: &StorageLocations,
     archive_path: &Path,
 ) -> LibraryResult<ImportResult> {
-    let database_path = locations.library_root.join(DATABASE_FILE);
+    let database_path = locations.database_path.clone();
     if !database_path.is_file() {
         return Err(LibraryError::Message(
             "ライブラリが初期化されていません".into(),
@@ -2183,7 +2223,7 @@ fn import_legacy_archive(
             });
         }
         fs::write(staging_asset_dir.join(&cover_filename), thumbnail_bytes)?;
-        let asset_directory = locations.asset_storage_root.join("assets").join(&asset_id);
+        let asset_directory = asset_directory(&locations.asset_storage_root, &asset_id)?;
         copy_staged_asset(
             &staging_asset_dir,
             &asset_directory,
@@ -2855,12 +2895,35 @@ mod tests {
     #[test]
     fn creates_a_library_schema() {
         let root = std::env::temp_dir().join(format!("vr-asset-library-test-{}", unix_timestamp()));
-        prepare_library(&root, &root.join("asset-storage"), &root.join("db-backups")).unwrap();
+        prepare_library(
+            &root,
+            &root.join(DATABASE_FILE),
+            &root.join("asset-storage"),
+            &root.join("db-backups"),
+        )
+        .unwrap();
 
         let database_path = root.join(DATABASE_FILE);
         assert!(database_path.is_file());
         assert_eq!(count_assets(&database_path).unwrap(), 0);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn creates_library_database_at_a_custom_path() {
+        let root =
+            std::env::temp_dir().join(format!("vr-asset-library-custom-db-{}", Uuid::now_v7()));
+        let library = root.join("library");
+        let database = root.join("database").join(DATABASE_FILE);
+        let asset_storage = root.join("asset-storage");
+        let backups = root.join("backups");
+
+        prepare_library(&library, &database, &asset_storage, &backups).unwrap();
+
+        assert!(database.is_file());
+        assert!(!library.join(DATABASE_FILE).exists());
+        assert_eq!(count_assets(&database).unwrap(), 0);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2882,6 +2945,16 @@ mod tests {
     #[test]
     fn refuses_an_invalid_asset_id_for_storage_paths() {
         assert!(asset_directory(Path::new("/tmp/assets"), "../outside").is_err());
+    }
+
+    #[test]
+    fn shards_asset_directories_by_random_uuid_suffix() {
+        let root = Path::new("/tmp/assets");
+        let asset_id = "01900000-0000-7000-8000-0000000000af";
+        assert_eq!(
+            asset_directory(root, asset_id).unwrap(),
+            root.join("assets").join("af").join(asset_id)
+        );
     }
 
     #[test]
@@ -2914,7 +2987,13 @@ mod tests {
     fn schema_allows_only_one_category_per_asset() {
         let root =
             std::env::temp_dir().join(format!("vr-asset-library-category-{}", Uuid::now_v7()));
-        prepare_library(&root, &root.join("asset-storage"), &root.join("db-backups")).unwrap();
+        prepare_library(
+            &root,
+            &root.join(DATABASE_FILE),
+            &root.join("asset-storage"),
+            &root.join("db-backups"),
+        )
+        .unwrap();
         let connection = Connection::open(root.join(DATABASE_FILE)).unwrap();
         connection.execute("INSERT INTO assets (id, title, created_at, updated_at) VALUES ('asset-1', 'Asset', 0, 0)", []).unwrap();
         connection.execute("INSERT INTO categories (id, name) VALUES ('category-1', 'One'), ('category-2', 'Two')", []).unwrap();
@@ -2959,10 +3038,16 @@ mod tests {
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join("main.zip"), b"main asset").unwrap();
         fs::write(source.join("readme.txt"), b"instructions").unwrap();
-        prepare_library(&library, &asset_storage, &database_backups).unwrap();
+        prepare_library(
+            &library,
+            &library.join(DATABASE_FILE),
+            &asset_storage,
+            &database_backups,
+        )
+        .unwrap();
 
         let result = import_into_library(
-            &library,
+            &library.join(DATABASE_FILE),
             &asset_storage,
             ImportRequest {
                 title: "Test asset".into(),
@@ -2983,15 +3068,9 @@ mod tests {
 
         assert_eq!(result.file_count, 2);
         assert_eq!(count_assets(&library.join(DATABASE_FILE)).unwrap(), 1);
+        let asset_directory = asset_directory(&asset_storage, &result.asset_id).unwrap();
         assert_eq!(
-            fs::read_dir(
-                asset_storage
-                    .join("assets")
-                    .join(&result.asset_id)
-                    .join("files")
-            )
-            .unwrap()
-            .count(),
+            fs::read_dir(asset_directory.join("files")).unwrap().count(),
             2
         );
 
@@ -3007,7 +3086,13 @@ mod tests {
         let source_dir = root.join("source");
         let source_zip = source_dir.join("legacy.zip");
         fs::create_dir_all(&source_dir).unwrap();
-        prepare_library(&library, &asset_storage, &backups).unwrap();
+        prepare_library(
+            &library,
+            &library.join(DATABASE_FILE),
+            &asset_storage,
+            &backups,
+        )
+        .unwrap();
         {
             let file = File::create(&source_zip).unwrap();
             let mut writer = ZipWriter::new(file);
@@ -3033,16 +3118,14 @@ mod tests {
             library_root: library.clone(),
             asset_storage_root: asset_storage.clone(),
             database_backup_root: backups,
+            database_path: library.join(DATABASE_FILE),
         };
         let result = import_legacy_archive(&locations, &source_zip).unwrap();
         assert_eq!(result.title, "Product");
         assert_eq!(result.file_count, 3);
         assert_eq!(count_assets(&library.join(DATABASE_FILE)).unwrap(), 1);
-        assert!(asset_storage
-            .join("assets")
-            .join(&result.asset_id)
-            .join("cover.png")
-            .is_file());
+        let asset_directory = asset_directory(&asset_storage, &result.asset_id).unwrap();
+        assert!(asset_directory.join("cover.png").is_file());
         let detail = Connection::open(library.join(DATABASE_FILE))
             .unwrap()
             .query_row(
@@ -3053,15 +3136,10 @@ mod tests {
             .unwrap();
         assert_eq!(detail.0, "https://booth.pm/ja/items/123");
         assert_eq!(detail.1, None);
-        let stored = fs::read_dir(
-            asset_storage
-                .join("assets")
-                .join(&result.asset_id)
-                .join("files"),
-        )
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
+        let stored = fs::read_dir(asset_directory.join("files"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
         assert_eq!(stored.len(), 3);
         let names = stored
             .iter()
@@ -3071,27 +3149,12 @@ mod tests {
         assert!(names.contains(&"already.zip".to_owned()));
         assert!(names.contains(&"Folder.zip".to_owned()));
         assert_eq!(
-            fs::read(
-                asset_storage
-                    .join("assets")
-                    .join(&result.asset_id)
-                    .join("files")
-                    .join("already.zip")
-            )
-            .unwrap(),
+            fs::read(asset_directory.join("files").join("already.zip")).unwrap(),
             b"existing archive"
         );
-        let folder_archive = ZipArchive::new(
-            File::open(
-                asset_storage
-                    .join("assets")
-                    .join(&result.asset_id)
-                    .join("files")
-                    .join("Folder.zip"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let folder_archive =
+            ZipArchive::new(File::open(asset_directory.join("files").join("Folder.zip")).unwrap())
+                .unwrap();
         assert!(folder_archive.file_names().any(|name| name == "data.txt"));
         assert!(!folder_archive
             .file_names()
@@ -3119,9 +3182,15 @@ mod tests {
         let source = root.join("source.zip");
         fs::create_dir_all(&root).unwrap();
         fs::write(&source, b"asset").unwrap();
-        prepare_library(&library, &asset_storage, &database_backups).unwrap();
-        import_into_library(
+        prepare_library(
             &library,
+            &library.join(DATABASE_FILE),
+            &asset_storage,
+            &database_backups,
+        )
+        .unwrap();
+        import_into_library(
+            &library.join(DATABASE_FILE),
             &asset_storage,
             ImportRequest {
                 title: "Backup test".into(),

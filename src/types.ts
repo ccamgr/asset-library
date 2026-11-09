@@ -1,10 +1,12 @@
 export type Status = {
   defaultAssetStoragePath: string;
   defaultDatabaseBackupPath: string;
+  defaultDatabasePath: string;
   initialized: boolean;
   assetCount: number;
   assetStoragePath: string | null;
   databaseBackupPath: string | null;
+  databasePath: string | null;
 };
 export type Tag = { id: string; name: string; color: string | null };
 export type Category = { id: string; name: string };

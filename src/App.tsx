@@ -37,6 +37,7 @@ function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [storagePath, setStoragePath] = useState("");
   const [backupPath, setBackupPath] = useState("");
+  const [databasePath, setDatabasePath] = useState("");
   const [assets, setAssets] = useState<Asset[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -97,6 +98,7 @@ function App() {
     setStatus(next);
     setStoragePath(next.assetStoragePath ?? next.defaultAssetStoragePath);
     setBackupPath(next.databaseBackupPath ?? next.defaultDatabaseBackupPath);
+    setDatabasePath(next.databasePath ?? next.defaultDatabasePath);
     if (!next.initialized) return;
     const [, nextTags, nextCategories] =
       await Promise.all([
@@ -214,6 +216,7 @@ function App() {
         request: {
           assetStoragePath: storagePath,
           databaseBackupPath: backupPath,
+          databasePath,
         },
       });
       await refresh();
@@ -378,14 +381,21 @@ function App() {
         <SetupScreen
           storagePath={storagePath}
           backupPath={backupPath}
+          databasePath={databasePath}
           busy={busy}
           setStoragePath={setStoragePath}
           setBackupPath={setBackupPath}
+          setDatabasePath={setDatabasePath}
           onChooseStorage={() =>
             void chooseDirectory("アセット保存先", setStoragePath)
           }
           onChooseBackup={() =>
             void chooseDirectory("DBバックアップ先", setBackupPath)
+          }
+          onChooseDatabase={() =>
+            void chooseDirectory("DB本体の保存先", (path) =>
+              setDatabasePath(`${path.replace(/[\\/]$/, "")}/library.db`),
+            )
           }
           onInitialize={() => void initialize()}
         />

@@ -89,10 +89,12 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
       return {
         defaultAssetStoragePath: "ブラウザプレビュー",
         defaultDatabaseBackupPath: "ブラウザプレビュー",
+        defaultDatabasePath: "ブラウザプレビュー/library.db",
         initialized: true,
         assetCount: assets.length,
         assetStoragePath: "ブラウザプレビュー",
         databaseBackupPath: "ブラウザプレビュー",
+        databasePath: "ブラウザプレビュー/library.db",
       } as T;
     case "list_assets": {
       const query = String(args?.query ?? "").trim().toLocaleLowerCase();
