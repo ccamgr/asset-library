@@ -494,6 +494,16 @@ fn initialize_library(
             .map_err(|error| error.to_string())?;
     prepare_library(&library_path, &asset_storage_path, &database_backup_path)
         .map_err(|error| error.to_string())?;
+    let normalized = (|| -> LibraryResult<usize> {
+        let connection = Connection::open(library_path.join(DATABASE_FILE))?;
+        normalize_managed_filenames(&connection, &asset_storage_path)
+    })();
+    match normalized {
+        Ok(renamed) => state.log(format!("managed filenames normalized renamed={renamed}")),
+        Err(error) => state.log(format!(
+            "managed filename normalization failed reason={error}"
+        )),
+    }
     allow_cover_paths(&app, &library_path, &asset_storage_path)
         .map_err(|error| error.to_string())?;
 
@@ -1046,7 +1056,7 @@ fn add_asset_files(
     for (source, byte_size) in sources {
         let id = Uuid::now_v7().to_string();
         let original_filename = safe_filename(&source).map_err(|error| error.to_string())?;
-        let stored_filename = format!("{id}-{original_filename}");
+        let stored_filename = available_filename(&destination, &original_filename, None);
         let target = destination.join(&stored_filename);
         if let Err(error) = fs::copy(&source, &target) {
             let _ = fs::remove_file(target);
@@ -1991,6 +2001,56 @@ fn prepare_library(
     Ok(())
 }
 
+fn normalize_managed_filenames(
+    connection: &Connection,
+    asset_storage_root: &Path,
+) -> LibraryResult<usize> {
+    let mut statement = connection.prepare(
+        "SELECT id, asset_id, relative_path, original_filename
+         FROM asset_files
+         WHERE storage_mode = 'managed'
+         ORDER BY asset_id, created_at, id",
+    )?;
+    let files = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    let mut renamed = 0;
+    for (file_id, asset_id, relative_path, original_filename) in files {
+        let directory = asset_files_directory(asset_storage_root, &asset_id)?;
+        let current = asset_storage_root.join(&relative_path);
+        if !current.is_file() {
+            continue;
+        }
+        let current_filename = current.file_name().and_then(|value| value.to_str());
+        let original_filename = safe_filename(Path::new(&original_filename))?;
+        let target_filename = available_filename(&directory, &original_filename, current_filename);
+        if current_filename == Some(target_filename.as_str()) {
+            continue;
+        }
+        let target = directory.join(&target_filename);
+        fs::rename(&current, &target)?;
+        let new_relative_path = format!("assets/{asset_id}/files/{target_filename}");
+        if let Err(error) = connection.execute(
+            "UPDATE asset_files SET relative_path=?1 WHERE id=?2",
+            params![new_relative_path, file_id],
+        ) {
+            let _ = fs::rename(&target, &current);
+            return Err(error.into());
+        }
+        renamed += 1;
+    }
+    Ok(renamed)
+}
+
 fn import_into_library(
     root: &Path,
     asset_storage_root: &Path,
@@ -2039,7 +2099,7 @@ fn import_into_library(
 
             let file_id = Uuid::now_v7().to_string();
             let original_filename = safe_filename(&source_path)?;
-            let stored_filename = format!("{file_id}-{original_filename}");
+            let stored_filename = available_filename(&staging_files_dir, &original_filename, None);
             let staged_path = staging_files_dir.join(&stored_filename);
             let byte_size = copy_file(&source_path, &staged_path)?;
             total_bytes = total_bytes.saturating_add(byte_size);
@@ -2140,8 +2200,8 @@ fn import_legacy_archive(
     fs::create_dir_all(&staging_files_dir)?;
     let result = (|| -> LibraryResult<ImportResult> {
         let file_id = Uuid::now_v7().to_string();
-        let original_filename = format!("{title}.zip");
-        let stored_filename = format!("{file_id}-{original_filename}");
+        let original_filename = safe_filename(Path::new(&format!("{title}.zip")))?;
+        let stored_filename = available_filename(&staging_files_dir, &original_filename, None);
         let staged_zip = staging_files_dir.join(&stored_filename);
         let byte_size = write_product_archive(
             &mut archive,
@@ -2338,6 +2398,30 @@ fn safe_filename(path: &Path) -> LibraryResult<String> {
         return Err(LibraryError::Message("使用できないファイル名です".into()));
     }
     Ok(sanitized)
+}
+
+fn available_filename(directory: &Path, filename: &str, current_filename: Option<&str>) -> String {
+    if current_filename == Some(filename) || !directory.join(filename).exists() {
+        return filename.to_owned();
+    }
+
+    let path = Path::new(filename);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(filename);
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    for suffix in 2.. {
+        let candidate = format!("{stem} ({suffix}){extension}");
+        if current_filename == Some(candidate.as_str()) || !directory.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded filename suffix search must find an available name")
 }
 
 fn insert_imported_asset(
@@ -2652,6 +2736,21 @@ pub fn run() {
                 .asset_storage_path
                 .clone()
                 .unwrap_or_else(|| library_root.join("asset-storage"));
+            let database_path = library_root.join(DATABASE_FILE);
+            if database_path.is_file() {
+                match Connection::open(&database_path)
+                    .map_err(LibraryError::from)
+                    .and_then(|connection| {
+                        normalize_managed_filenames(&connection, &asset_storage_root)
+                    }) {
+                    Ok(renamed) => state.log(format!(
+                        "managed filenames normalized on startup renamed={renamed}"
+                    )),
+                    Err(error) => state.log(format!(
+                        "managed filename normalization failed on startup reason={error}"
+                    )),
+                }
+            }
             allow_cover_paths(app.handle(), &library_root, &asset_storage_root)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             app.manage(state);
@@ -2980,6 +3079,53 @@ mod tests {
         let contents = fs::read_to_string(&log_path).unwrap();
         assert!(contents.contains("operation started with details"));
         assert_eq!(contents.lines().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normalizes_managed_filenames_to_original_names() {
+        let root = std::env::temp_dir().join(format!("vr-asset-library-files-{}", Uuid::now_v7()));
+        let library = root.join("library");
+        let asset_storage = root.join("asset-storage");
+        let backups = root.join("backups");
+        let asset_id = "01900000-0000-7000-8000-000000000001";
+        let file_id = "file-1";
+        let previous_name = "file-1-example.zip";
+        prepare_library(&library, &asset_storage, &backups).unwrap();
+        let files = asset_files_directory(&asset_storage, asset_id).unwrap();
+        fs::create_dir_all(&files).unwrap();
+        fs::write(files.join(previous_name), b"asset").unwrap();
+        let connection = Connection::open(library.join(DATABASE_FILE)).unwrap();
+        connection
+            .execute(
+                "INSERT INTO assets (id, title, created_at, updated_at) VALUES (?1, 'Example', 0, 0)",
+                params![asset_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO asset_files (id, asset_id, storage_mode, relative_path, external_path, original_filename, byte_size, sha256, created_at)
+                 VALUES (?1, ?2, 'managed', ?3, NULL, 'example.zip', 5, NULL, 0)",
+                params![file_id, asset_id, format!("assets/{asset_id}/files/{previous_name}")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            normalize_managed_filenames(&connection, &asset_storage).unwrap(),
+            1
+        );
+        assert!(files.join("example.zip").is_file());
+        let relative_path: String = connection
+            .query_row(
+                "SELECT relative_path FROM asset_files WHERE id=?1",
+                params![file_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            relative_path,
+            "assets/01900000-0000-7000-8000-000000000001/files/example.zip"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
