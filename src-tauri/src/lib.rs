@@ -1,8 +1,8 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Write},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -2053,7 +2053,7 @@ fn import_into_library(
         }
 
         let asset_directory = asset_storage_root.join("assets").join(&asset_id);
-        copy_staged_asset(&staging_asset_dir, &asset_directory, &files)?;
+        copy_staged_asset(&staging_asset_dir, &asset_directory, &files, None)?;
 
         let database_result =
             insert_imported_asset(&database_path, &asset_id, title, &files, Some(&request));
@@ -2090,26 +2090,46 @@ fn import_legacy_archive(
     let archive_file = File::open(archive_path)?;
     let mut archive = ZipArchive::new(BufReader::new(archive_file))
         .map_err(|error| LibraryError::Message(format!("ZIPを開けません: {error}")))?;
-    let names = (0..archive.len())
+    let entries = (0..archive.len())
         .map(|index| {
             archive
                 .by_index(index)
-                .map(|entry| entry.name().to_owned())
+                .map(|entry| LegacyArchiveEntry {
+                    source_name: entry.name().to_owned(),
+                    normalized_name: normalize_archive_name(entry.name()),
+                })
                 .map_err(|error| LibraryError::Message(format!("ZIPを読み取れません: {error}")))
         })
         .collect::<LibraryResult<Vec<_>>>()?;
-    let info_name = names
+    if entries
         .iter()
-        .find(|name| name.as_str() == "_assetinfo.md")
+        .any(|entry| !safe_archive_entry(&entry.normalized_name))
+    {
+        return Err(LibraryError::Message(
+            "ZIP内に安全でないパスが含まれています".into(),
+        ));
+    }
+    let info = entries
+        .iter()
+        .find(|entry| entry.normalized_name == "_assetinfo.md")
         .ok_or_else(|| LibraryError::Message("_assetinfo.md がありません".into()))?;
-    let thumbnail_name = names
+    let thumbnail = entries
         .iter()
-        .find(|name| name.as_str() == "_thumbnail.jpg")
-        .ok_or_else(|| LibraryError::Message("_thumbnail.jpg がありません".into()))?;
+        .find(|entry| {
+            matches!(
+                entry.normalized_name.as_str(),
+                "_thumbnail.jpg" | "_thumbnail.jpeg" | "_thumbnail.png"
+            )
+        })
+        .ok_or_else(|| {
+            LibraryError::Message(
+                "_thumbnail.jpg、_thumbnail.jpeg、_thumbnail.png のいずれかがありません".into(),
+            )
+        })?;
 
-    let mut roots = names
+    let mut roots = entries
         .iter()
-        .filter_map(|name| archive_root_directory(name))
+        .filter_map(|entry| archive_root_directory(&entry.normalized_name))
         .collect::<Vec<_>>();
     roots.sort();
     roots.dedup();
@@ -2120,45 +2140,56 @@ fn import_legacy_archive(
     }
     let product_directory = roots.remove(0);
     let title = safe_archive_name(&product_directory)?;
-    let info = read_zip_entry(&mut archive, info_name)?;
-    let thumbnail = read_zip_entry(&mut archive, thumbnail_name)?;
-    let product_prefix = format!("{product_directory}/");
-    let product_entries = names
-        .iter()
-        .filter(|name| name.starts_with(&product_prefix))
-        .cloned()
-        .collect::<Vec<_>>();
-    if product_entries.iter().any(|name| !safe_archive_entry(name)) {
-        return Err(LibraryError::Message(
-            "ZIP内に安全でないパスが含まれています".into(),
-        ));
-    }
+    let info = read_zip_entry(&mut archive, &info.source_name)?;
+    let thumbnail_bytes = read_zip_entry(&mut archive, &thumbnail.source_name)?;
+    let cover_filename = format!(
+        "cover.{}",
+        Path::new(&thumbnail.normalized_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .ok_or_else(|| LibraryError::Message("サムネイルの形式が不正です".into()))?
+    );
+    let product_groups = product_archive_groups(&entries, &product_directory)?;
 
     let asset_id = Uuid::now_v7().to_string();
     let staging_asset_dir = std::env::temp_dir().join("VRAssetLibrary").join(&asset_id);
     let staging_files_dir = staging_asset_dir.join("files");
     fs::create_dir_all(&staging_files_dir)?;
     let result = (|| -> LibraryResult<ImportResult> {
-        let file_id = Uuid::now_v7().to_string();
-        let original_filename = safe_filename(Path::new(&format!("{title}.zip")))?;
-        let stored_filename = available_filename(&staging_files_dir, &original_filename, None);
-        let staged_zip = staging_files_dir.join(&stored_filename);
-        let byte_size = write_product_archive(
-            &mut archive,
-            &product_entries,
-            &product_directory,
-            &staged_zip,
-        )?;
-        fs::write(staging_asset_dir.join("cover.jpg"), thumbnail)?;
-
-        let files = vec![ImportedFile {
-            id: file_id,
-            original_filename,
-            stored_filename,
-            byte_size,
-        }];
+        let mut files = Vec::with_capacity(product_groups.len());
+        let mut total_bytes = 0_u64;
+        for (group_name, group_entries) in product_groups {
+            let file_id = Uuid::now_v7().to_string();
+            let is_directory = archive_group_is_directory(&group_name, &group_entries);
+            let requested_filename = if is_directory {
+                format!("{group_name}.zip")
+            } else {
+                group_name.clone()
+            };
+            let original_filename = safe_filename(Path::new(&requested_filename))?;
+            let stored_filename = available_filename(&staging_files_dir, &original_filename, None);
+            let staged_path = staging_files_dir.join(&stored_filename);
+            let byte_size = if is_directory {
+                write_directory_archive(&mut archive, &group_name, &group_entries, &staged_path)?
+            } else {
+                copy_archive_file(&mut archive, &group_entries, &staged_path)?
+            };
+            total_bytes = total_bytes.saturating_add(byte_size);
+            files.push(ImportedFile {
+                id: file_id,
+                original_filename,
+                stored_filename,
+                byte_size,
+            });
+        }
+        fs::write(staging_asset_dir.join(&cover_filename), thumbnail_bytes)?;
         let asset_directory = locations.asset_storage_root.join("assets").join(&asset_id);
-        copy_staged_asset(&staging_asset_dir, &asset_directory, &files)?;
+        copy_staged_asset(
+            &staging_asset_dir,
+            &asset_directory,
+            &files,
+            Some(&cover_filename),
+        )?;
         let info = String::from_utf8_lossy(&info);
         let (product_url, note) = parse_legacy_asset_info(&info);
         let database_result = insert_legacy_imported_asset(
@@ -2167,6 +2198,7 @@ fn import_legacy_archive(
             &title,
             product_url.as_deref(),
             note.as_deref(),
+            &cover_filename,
             &files,
         );
         if let Err(error) = database_result {
@@ -2177,7 +2209,7 @@ fn import_legacy_archive(
             asset_id,
             title,
             file_count: files.len(),
-            total_bytes: byte_size,
+            total_bytes,
         })
     })();
     if result.is_err() {
@@ -2186,25 +2218,37 @@ fn import_legacy_archive(
     result
 }
 
+#[derive(Clone)]
+struct LegacyArchiveEntry {
+    source_name: String,
+    normalized_name: String,
+}
+
+fn normalize_archive_name(name: &str) -> String {
+    name.replace('\\', "/")
+}
+
 fn archive_root_directory(name: &str) -> Option<String> {
     if name.starts_with('_') || !safe_archive_entry(name) {
         return None;
     }
-    let mut components = Path::new(name).components();
-    let Component::Normal(first) = components.next()? else {
-        return None;
-    };
+    let normalized = name.trim_end_matches('/');
+    let mut components = normalized.split('/');
+    let first = components.next()?;
     if components.next().is_none() && !name.ends_with('/') {
         return None;
     }
-    first.to_str().map(ToOwned::to_owned)
+    Some(first.to_owned())
 }
 
 fn safe_archive_entry(name: &str) -> bool {
-    !name.is_empty()
-        && Path::new(name)
-            .components()
-            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+    let normalized = normalize_archive_name(name);
+    !normalized.is_empty()
+        && !normalized.starts_with('/')
+        && normalized
+            .trim_end_matches('/')
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 fn safe_archive_name(name: &str) -> LibraryResult<String> {
@@ -2223,31 +2267,99 @@ fn read_zip_entry<R: Read + std::io::Seek>(
     Ok(bytes)
 }
 
-fn write_product_archive<R: Read + std::io::Seek>(
-    archive: &mut ZipArchive<R>,
-    entries: &[String],
+fn product_archive_groups(
+    entries: &[LegacyArchiveEntry],
     product_directory: &str,
+) -> LibraryResult<BTreeMap<String, Vec<LegacyArchiveEntry>>> {
+    let prefix = format!("{product_directory}/");
+    let mut groups = BTreeMap::new();
+    for entry in entries {
+        let Some(relative_name) = entry.normalized_name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if relative_name.is_empty() {
+            continue;
+        }
+        let group_name = relative_name
+            .split('/')
+            .next()
+            .ok_or_else(|| LibraryError::Message("商品ファイルの構成が不正です".into()))?;
+        groups
+            .entry(group_name.to_owned())
+            .or_insert_with(Vec::new)
+            .push(LegacyArchiveEntry {
+                source_name: entry.source_name.clone(),
+                normalized_name: relative_name.to_owned(),
+            });
+    }
+    if groups.is_empty() {
+        return Err(LibraryError::Message("商品ディレクトリが空です".into()));
+    }
+    Ok(groups)
+}
+
+fn archive_group_is_directory(group_name: &str, entries: &[LegacyArchiveEntry]) -> bool {
+    let prefix = format!("{group_name}/");
+    entries
+        .iter()
+        .any(|entry| entry.normalized_name.starts_with(&prefix))
+}
+
+fn copy_archive_file<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    entries: &[LegacyArchiveEntry],
+    destination: &Path,
+) -> LibraryResult<u64> {
+    let entry_name = entries
+        .iter()
+        .find(|entry| !entry.normalized_name.ends_with('/'))
+        .ok_or_else(|| LibraryError::Message("商品ファイルの構成が不正です".into()))?;
+    if entries.len() != 1 {
+        return Err(LibraryError::Message("商品ファイルの構成が不正です".into()));
+    }
+    let mut input = archive.by_name(&entry_name.source_name).map_err(|error| {
+        LibraryError::Message(format!(
+            "ZIP内の {} を読めません: {error}",
+            entry_name.source_name
+        ))
+    })?;
+    let output = File::create(destination)?;
+    let mut output = BufWriter::new(output);
+    let byte_size = std::io::copy(&mut input, &mut output)?;
+    output.flush()?;
+    Ok(byte_size)
+}
+
+fn write_directory_archive<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    group_name: &str,
+    entries: &[LegacyArchiveEntry],
     destination: &Path,
 ) -> LibraryResult<u64> {
     let output = File::create(destination)?;
     let mut writer = ZipWriter::new(BufWriter::new(output));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    if entries.is_empty() {
-        writer
-            .add_directory(format!("{product_directory}/"), options)
-            .map_err(|error| LibraryError::Message(format!("ZIPを作成できません: {error}")))?;
-    }
-    for name in entries {
-        let mut entry = archive.by_name(name).map_err(|error| {
-            LibraryError::Message(format!("ZIP内の {name} を読めません: {error}"))
+    let prefix = format!("{group_name}/");
+    for entry_name in entries {
+        let Some(archived_name) = entry_name.normalized_name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if archived_name.is_empty() {
+            continue;
+        }
+        let mut entry = archive.by_name(&entry_name.source_name).map_err(|error| {
+            LibraryError::Message(format!(
+                "ZIP内の {} を読めません: {error}",
+                entry_name.source_name
+            ))
         })?;
         if entry.is_dir() {
             writer
-                .add_directory(name, options)
+                .add_directory(archived_name, options)
                 .map_err(|error| LibraryError::Message(format!("ZIPを作成できません: {error}")))?;
         } else {
             writer
-                .start_file(name, options)
+                .start_file(archived_name, options)
                 .map_err(|error| LibraryError::Message(format!("ZIPを作成できません: {error}")))?;
             std::io::copy(&mut entry, &mut writer)?;
         }
@@ -2275,6 +2387,7 @@ fn copy_staged_asset(
     staging_asset_dir: &Path,
     asset_directory: &Path,
     files: &[ImportedFile],
+    cover_filename: Option<&str>,
 ) -> LibraryResult<()> {
     let destination_files = asset_directory.join("files");
     fs::create_dir_all(&destination_files)?;
@@ -2284,9 +2397,11 @@ fn copy_staged_asset(
             destination_files.join(&file.stored_filename),
         )?;
     }
-    let staged_cover = staging_asset_dir.join("cover.jpg");
-    if staged_cover.is_file() {
-        fs::copy(staged_cover, asset_directory.join("cover.jpg"))?;
+    if let Some(cover_filename) = cover_filename {
+        let staged_cover = staging_asset_dir.join(cover_filename);
+        if staged_cover.is_file() {
+            fs::copy(staged_cover, asset_directory.join(cover_filename))?;
+        }
     }
     fs::remove_dir_all(staging_asset_dir)?;
     Ok(())
@@ -2420,6 +2535,7 @@ fn insert_legacy_imported_asset(
     title: &str,
     product_url: Option<&str>,
     note: Option<&str>,
+    cover_filename: &str,
     files: &[ImportedFile],
 ) -> LibraryResult<()> {
     insert_imported_asset(database_path, asset_id, title, files, None)?;
@@ -2432,7 +2548,7 @@ fn insert_legacy_imported_asset(
         params![
             product_url,
             note,
-            format!("assets/{asset_id}/cover.jpg"),
+            format!("assets/{asset_id}/{cover_filename}"),
             unix_timestamp(),
             asset_id,
         ],
@@ -2871,7 +2987,7 @@ mod tests {
             fs::read_dir(
                 asset_storage
                     .join("assets")
-                    .join(result.asset_id)
+                    .join(&result.asset_id)
                     .join("files")
             )
             .unwrap()
@@ -2883,7 +2999,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_a_legacy_archive_and_preserves_product_directory() {
+    fn imports_legacy_archive_children_as_separate_archives() {
         let root = std::env::temp_dir().join(format!("vr-asset-library-legacy-{}", Uuid::now_v7()));
         let library = root.join("library");
         let asset_storage = root.join("asset-storage");
@@ -2901,10 +3017,16 @@ mod tests {
             writer
                 .write_all("https://booth.pm/ja/items/123".as_bytes())
                 .unwrap();
-            writer.start_file("_thumbnail.jpg", options).unwrap();
+            writer.start_file("_thumbnail.png", options).unwrap();
             writer.write_all(b"not-a-real-jpeg").unwrap();
-            writer.start_file("Product/readme.txt", options).unwrap();
+            writer.start_file("Product\\readme.txt", options).unwrap();
             writer.write_all(b"asset data").unwrap();
+            writer
+                .start_file("Product\\Folder\\data.txt", options)
+                .unwrap();
+            writer.write_all(b"nested asset data").unwrap();
+            writer.start_file("Product\\already.zip", options).unwrap();
+            writer.write_all(b"existing archive").unwrap();
             writer.finish().unwrap();
         }
         let locations = StorageLocations {
@@ -2914,11 +3036,12 @@ mod tests {
         };
         let result = import_legacy_archive(&locations, &source_zip).unwrap();
         assert_eq!(result.title, "Product");
+        assert_eq!(result.file_count, 3);
         assert_eq!(count_assets(&library.join(DATABASE_FILE)).unwrap(), 1);
         assert!(asset_storage
             .join("assets")
             .join(&result.asset_id)
-            .join("cover.jpg")
+            .join("cover.png")
             .is_file());
         let detail = Connection::open(library.join(DATABASE_FILE))
             .unwrap()
@@ -2933,18 +3056,46 @@ mod tests {
         let stored = fs::read_dir(
             asset_storage
                 .join("assets")
-                .join(result.asset_id)
+                .join(&result.asset_id)
                 .join("files"),
         )
         .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-        let archive = ZipArchive::new(File::open(stored).unwrap()).unwrap();
-        assert!(archive
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+        assert_eq!(stored.len(), 3);
+        let names = stored
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"readme.txt".to_owned()));
+        assert!(names.contains(&"already.zip".to_owned()));
+        assert!(names.contains(&"Folder.zip".to_owned()));
+        assert_eq!(
+            fs::read(
+                asset_storage
+                    .join("assets")
+                    .join(&result.asset_id)
+                    .join("files")
+                    .join("already.zip")
+            )
+            .unwrap(),
+            b"existing archive"
+        );
+        let folder_archive = ZipArchive::new(
+            File::open(
+                asset_storage
+                    .join("assets")
+                    .join(&result.asset_id)
+                    .join("files")
+                    .join("Folder.zip"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(folder_archive.file_names().any(|name| name == "data.txt"));
+        assert!(!folder_archive
             .file_names()
-            .any(|name| name == "Product/readme.txt"));
+            .any(|name| name.starts_with("Folder/")));
         fs::remove_dir_all(root).unwrap();
     }
 
