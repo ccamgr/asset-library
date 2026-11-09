@@ -3,18 +3,20 @@ import { X } from "lucide-react";
 import { invoke } from "../lib/api";
 import { confirmDialog } from "../lib/confirm-dialog";
 import { bytes } from "../lib/utils";
-import type { BackupEntry, Capacity } from "../types";
+import type { BackupEntry, Capacity, LibraryViewSize } from "../types";
 
 type Props = {
   onClose(): void;
   onOpenLegacyImport(): void;
   onError(reason: string): void;
   onMessage(message: string): void;
+  libraryViewSize: LibraryViewSize;
+  onLibraryViewSizeChange(size: LibraryViewSize): void;
 };
 
 type ThumbnailCacheRebuildResult = { generated: number; skipped: number };
 
-export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage }: Props) {
+export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage, libraryViewSize, onLibraryViewSizeChange }: Props) {
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [selected, setSelected] = useState("");
@@ -137,6 +139,15 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
             <input type="checkbox" checked={showOptional} onChange={(event) => updateOptionalFields(event.target.checked)} />
             配布元・バージョンを表示
           </label>
+          <fieldset className="library-view-size">
+            <legend>ライブラリ一覧の大きさ</legend>
+            {(["large", "medium", "small"] as const).map((size) => (
+              <label className="check" key={size}>
+                <input type="radio" name="library-view-size" checked={libraryViewSize === size} onChange={() => onLibraryViewSizeChange(size)} />
+                {{ large: "大", medium: "中", small: "小" }[size]}
+              </label>
+            ))}
+          </fieldset>
         </section>
       </section>
     </div>

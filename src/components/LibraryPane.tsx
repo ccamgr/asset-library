@@ -1,11 +1,12 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { Asset, Status } from "../types";
+import type { Asset, LibraryViewSize, Status } from "../types";
 
 type Props = {
   status: Status;
   assets: Asset[];
   selectedId: string | null;
   query: string;
+  viewSize: LibraryViewSize;
   busy: boolean;
   hasMoreAssets: boolean;
   setQuery(value: string): void;
@@ -18,6 +19,7 @@ export function LibraryPane({
   assets,
   selectedId,
   query,
+  viewSize,
   busy,
   hasMoreAssets,
   setQuery,
@@ -25,7 +27,7 @@ export function LibraryPane({
   onLoadMore,
 }: Props) {
   return (
-    <section className="library-pane">
+    <section className={`library-pane library-pane--${viewSize}`}>
       <header className="library-header">
         <p className="muted">{status.assetCount} アセット</p>
         <input

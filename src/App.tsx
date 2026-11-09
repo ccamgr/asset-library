@@ -18,6 +18,7 @@ import type {
   Asset,
   Category,
   Detail,
+  LibraryViewSize,
   LegacyImportProgress,
   LegacyImportComplete,
   Status,
@@ -25,6 +26,12 @@ import type {
 } from "./types";
 
 const ASSET_PAGE_SIZE = 100;
+const LIBRARY_VIEW_SIZE_KEY = "asset-library.library-view-size";
+
+const storedLibraryViewSize = (): LibraryViewSize => {
+  const value = localStorage.getItem(LIBRARY_VIEW_SIZE_KEY);
+  return value === "medium" || value === "small" ? value : "large";
+};
 
 function App() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -38,6 +45,9 @@ function App() {
   const [tagFilterIds, setTagFilterIds] = useState<string[]>([]);
   const [tagSearch, setTagSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [libraryViewSize, setLibraryViewSize] = useState<LibraryViewSize>(
+    storedLibraryViewSize,
+  );
   const [legacyProgress, setLegacyProgress] =
     useState<LegacyImportProgress | null>(null);
   const [legacyImportNotice, setLegacyImportNotice] = useState<string | null>(
@@ -56,6 +66,10 @@ function App() {
   const thumbnailRefreshTimer = useRef<number | null>(null);
 
   const reportFailure = (reason: unknown) => setError(String(reason));
+  const updateLibraryViewSize = (size: LibraryViewSize) => {
+    setLibraryViewSize(size);
+    localStorage.setItem(LIBRARY_VIEW_SIZE_KEY, size);
+  };
 
   const loadAssets = useCallback(async (
     search: string,
@@ -409,6 +423,7 @@ function App() {
           assets={assets}
           selectedId={selected?.id ?? null}
           query={query}
+          viewSize={libraryViewSize}
           busy={busy}
           hasMoreAssets={hasMoreAssets}
           setQuery={setQuery}
@@ -506,7 +521,7 @@ function App() {
           onStarted={(total) => setLegacyProgress({ completed: 0, total })}
         />
       )}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenLegacyImport={openLegacyImportFromSettings} onError={reportFailure} onMessage={setMessage} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenLegacyImport={openLegacyImportFromSettings} onError={reportFailure} onMessage={setMessage} libraryViewSize={libraryViewSize} onLibraryViewSizeChange={updateLibraryViewSize} />}
     </div>
   );
 }

@@ -8,6 +8,7 @@ export type Status = {
 };
 export type Tag = { id: string; name: string; color: string | null };
 export type Category = { id: string; name: string };
+export type LibraryViewSize = "large" | "medium" | "small";
 export type Asset = {
   id: string;
   title: string;
