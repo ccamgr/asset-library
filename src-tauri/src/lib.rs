@@ -727,14 +727,9 @@ fn list_assets(
         let tags = tags_by_asset.remove(&id).unwrap_or_default();
         let categories = categories_by_asset.remove(&id).unwrap_or_default();
         let cover_path = cover_path.and_then(|path| {
-            let cached = cached_thumbnail_path(
-                &locations.library_root,
-                &locations.asset_storage_root,
-                &id,
-                &path,
-            )
-            .ok()
-            .flatten();
+            let cached = cached_thumbnail_path(&locations.library_root, &id)
+                .ok()
+                .flatten();
             if cached.is_none() {
                 schedule_thumbnail_generation(&app, &state, &locations, &id, &path);
             }
@@ -1263,6 +1258,12 @@ fn get_asset_file_path(
     } else {
         PathBuf::from(external_path.ok_or_else(|| "外部ファイルのパスがありません".to_string())?)
     };
+    if !path.is_file() {
+        return Err(format!(
+            "保存ファイルが見つかりません: {}",
+            display_path(&path)
+        ));
+    }
     Ok(display_path(&path))
 }
 
@@ -1625,15 +1626,13 @@ fn asset_detail(
         version,
         note,
         cover_path: cover_path.and_then(|path| {
-            cached_thumbnail_path(library_root, asset_storage_root, asset_id, &path)
+            cached_thumbnail_path(library_root, asset_id)
                 .ok()
                 .flatten()
                 .or_else(|| {
                     generate_cached_thumbnail(library_root, asset_storage_root, asset_id, &path)
                         .ok()?;
-                    cached_thumbnail_path(library_root, asset_storage_root, asset_id, &path)
-                        .ok()
-                        .flatten()
+                    cached_thumbnail_path(library_root, asset_id).ok().flatten()
                 })
         }),
         tags: tags_for_asset(connection, asset_id)?,
@@ -1650,23 +1649,13 @@ fn thumbnail_cache_path(library_root: &Path, asset_id: &str) -> LibraryResult<Pa
         .join(format!("{asset_id}.jpg")))
 }
 
-fn cached_thumbnail_path(
-    library_root: &Path,
-    asset_storage_root: &Path,
-    asset_id: &str,
-    cover_path: &str,
-) -> LibraryResult<Option<String>> {
-    let source = asset_storage_root.join(cover_path);
-    if !source.is_file() {
-        return Ok(None);
-    }
+fn cached_thumbnail_path(library_root: &Path, asset_id: &str) -> LibraryResult<Option<String>> {
     let cache_path = thumbnail_cache_path(library_root, asset_id)?;
     if !cache_path.is_file() {
         return Ok(None);
     }
-    let cache_is_current = source.metadata()?.modified()? <= cache_path.metadata()?.modified()?;
     let cache_is_valid = image::image_dimensions(&cache_path).is_ok();
-    if !cache_is_current || !cache_is_valid {
+    if !cache_is_valid {
         let _ = fs::remove_file(&cache_path);
         return Ok(None);
     }
@@ -1813,8 +1802,10 @@ fn copy_database_snapshot(source_path: &Path, destination_path: &Path) -> Librar
 fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
     #[cfg(target_os = "windows")]
     let mut command = {
+        use std::os::windows::process::CommandExt;
+
         let mut command = Command::new("explorer.exe");
-        command.arg("/select,").arg(display_path(path));
+        command.raw_arg(format!("/select,\"{}\"", display_path(path)));
         command
     };
     #[cfg(target_os = "macos")]
@@ -2715,14 +2706,8 @@ mod tests {
             &format!("assets/{asset_id}/cover.png"),
         )
         .unwrap();
-        let cached = cached_thumbnail_path(
-            &root,
-            &asset_root,
-            &asset_id,
-            &format!("assets/{asset_id}/cover.png"),
-        )
-        .unwrap()
-        .unwrap();
+        fs::remove_file(&source).unwrap();
+        let cached = cached_thumbnail_path(&root, &asset_id).unwrap().unwrap();
         let dimensions = image::image_dimensions(&cached).unwrap();
         assert!(dimensions.0 <= 480);
         assert!(dimensions.1 <= 360);
