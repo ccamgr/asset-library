@@ -45,7 +45,11 @@ export type Detail = {
   files: FileItem[];
   relations: Relation[];
 };
-export type Capacity = { assetBytes: number; databaseBackupBytes: number };
+export type Capacity = {
+  assetBytes: number;
+  databaseBytes: number;
+  databaseBackupBytes: number;
+};
 export type BackupEntry = { path: string; name: string; byteSize: number };
 export type LegacyImportResult = {
   imported: { assetId: string; title: string }[];

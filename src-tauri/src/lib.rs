@@ -408,6 +408,7 @@ struct RemoveRelationRequest {
 struct CapacityReport {
     library_bytes: u64,
     asset_bytes: u64,
+    database_bytes: u64,
     thumbnail_cache_bytes: u64,
     database_backup_bytes: u64,
 }
@@ -1092,7 +1093,7 @@ fn add_asset_files(
     let timestamp = unix_timestamp();
     let result = (|| -> LibraryResult<()> {
         for file in &files {
-            transaction.execute("INSERT INTO asset_files (id, asset_id, storage_mode, relative_path, external_path, original_filename, byte_size, sha256, created_at) VALUES (?1, ?2, 'managed', ?3, NULL, ?4, ?5, NULL, ?6)", params![file.id, request.asset_id, format!("assets/{}/files/{}", request.asset_id, file.stored_filename), file.original_filename, file.byte_size as i64, timestamp])?;
+            transaction.execute("INSERT INTO asset_files (id, asset_id, storage_mode, relative_path, external_path, original_filename, byte_size, sha256, created_at) VALUES (?1, ?2, 'managed', ?3, NULL, ?4, ?5, NULL, ?6)", params![file.id, request.asset_id, asset_relative_path(&request.asset_id, &format!("files/{}", file.stored_filename))?, file.original_filename, file.byte_size as i64, timestamp])?;
         }
         transaction.execute(
             "UPDATE assets SET updated_at=?1 WHERE id=?2",
@@ -1301,7 +1302,8 @@ fn set_asset_cover(
         .map(str::to_ascii_lowercase)
         .filter(|value| ["png", "jpg", "jpeg", "webp", "gif"].contains(&value.as_str()))
         .ok_or_else(|| "PNG、JPEG、WebP、GIF画像を選んでください".to_string())?;
-    let relative_path = format!("assets/{asset_id}/cover.{extension}");
+    let relative_path = asset_relative_path(&asset_id, &format!("cover.{extension}"))
+        .map_err(|error| error.to_string())?;
     let destination = locations.asset_storage_root.join(&relative_path);
     let old_path: Option<String> = Connection::open(&locations.database_path)
         .map_err(|error| error.to_string())?
@@ -1408,12 +1410,17 @@ fn get_capacity_report(
     state: State<'_, AppState>,
 ) -> Result<CapacityReport, String> {
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
-    Ok(CapacityReport {
+    Ok(capacity_report(&locations))
+}
+
+fn capacity_report(locations: &StorageLocations) -> CapacityReport {
+    CapacityReport {
         library_bytes: directory_size(&locations.library_root),
         asset_bytes: directory_size(&locations.asset_storage_root.join("assets")),
+        database_bytes: database_size(&locations.database_path),
         thumbnail_cache_bytes: directory_size(&locations.library_root.join("thumbnail-cache")),
         database_backup_bytes: directory_size(&locations.database_backup_root),
-    })
+    }
 }
 
 #[tauri::command]
@@ -1910,6 +1917,20 @@ fn directory_size(path: &Path) -> u64 {
         .sum()
 }
 
+fn database_size(path: &Path) -> u64 {
+    let mut paths = vec![path.to_path_buf()];
+    if let Some(filename) = path.file_name().and_then(|value| value.to_str()) {
+        paths.push(path.with_file_name(format!("{filename}-wal")));
+        paths.push(path.with_file_name(format!("{filename}-shm")));
+    }
+    paths
+        .into_iter()
+        .filter_map(|path| fs::metadata(path).ok())
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+        .sum()
+}
+
 fn copy_database_snapshot(source_path: &Path, destination_path: &Path) -> LibraryResult<()> {
     let source = Connection::open(source_path)?;
     let mut destination = Connection::open(destination_path)?;
@@ -1985,15 +2006,27 @@ fn validated_asset_id(asset_id: &str) -> LibraryResult<&str> {
 }
 
 fn asset_directory(asset_storage_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
-    let asset_id = validated_asset_id(asset_id)?;
-    let shard = asset_id
-        .get(asset_id.len().saturating_sub(2)..)
-        .ok_or_else(|| LibraryError::Message("アセットIDが不正です".into()))?;
-    Ok(asset_storage_root.join("assets").join(shard).join(asset_id))
+    Ok(asset_storage_root.join(asset_relative_directory(asset_id)?))
 }
 
 fn asset_files_directory(asset_storage_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
     Ok(asset_directory(asset_storage_root, asset_id)?.join("files"))
+}
+
+fn asset_relative_directory(asset_id: &str) -> LibraryResult<String> {
+    let asset_id = validated_asset_id(asset_id)?;
+    let shard = asset_id
+        .get(asset_id.len().saturating_sub(2)..)
+        .ok_or_else(|| LibraryError::Message("アセットIDが不正です".into()))?;
+    Ok(format!("assets/{shard}/{asset_id}"))
+}
+
+fn asset_relative_path(asset_id: &str, filename: &str) -> LibraryResult<String> {
+    Ok(format!(
+        "{}/{}",
+        asset_relative_directory(asset_id)?,
+        filename
+    ))
 }
 
 fn cleanup_added_files(destination: &Path, files: &[ImportedFile]) {
@@ -2024,6 +2057,11 @@ fn prepare_library(
 
 fn validate_database_path(value: &str) -> LibraryResult<PathBuf> {
     let path = PathBuf::from(value.trim());
+    if !path.is_absolute() {
+        return Err(LibraryError::Message(
+            "DBファイルには絶対パスを指定してください".into(),
+        ));
+    }
     if path.file_name().and_then(|name| name.to_str()) != Some(DATABASE_FILE) {
         return Err(LibraryError::Message(format!(
             "DBファイル名は {DATABASE_FILE} を指定してください"
@@ -2546,7 +2584,8 @@ fn insert_imported_asset(
     )?;
 
     for file in files {
-        let relative_path = format!("assets/{asset_id}/files/{}", file.stored_filename);
+        let relative_path =
+            asset_relative_path(asset_id, &format!("files/{}", file.stored_filename))?;
         transaction.execute(
             "
             INSERT INTO asset_files (
@@ -2588,7 +2627,7 @@ fn insert_legacy_imported_asset(
         params![
             product_url,
             note,
-            format!("assets/{asset_id}/{cover_filename}"),
+            asset_relative_path(asset_id, cover_filename)?,
             unix_timestamp(),
             asset_id,
         ],
@@ -2943,6 +2982,11 @@ mod tests {
     }
 
     #[test]
+    fn refuses_a_relative_database_path() {
+        assert!(validate_database_path(DATABASE_FILE).is_err());
+    }
+
+    #[test]
     fn refuses_an_invalid_asset_id_for_storage_paths() {
         assert!(asset_directory(Path::new("/tmp/assets"), "../outside").is_err());
     }
@@ -2955,6 +2999,37 @@ mod tests {
             asset_directory(root, asset_id).unwrap(),
             root.join("assets").join("af").join(asset_id)
         );
+    }
+
+    #[test]
+    fn stores_asset_paths_in_the_same_shard_as_the_asset_directory() {
+        let asset_id = "01900000-0000-7000-8000-0000000000af";
+        assert_eq!(
+            asset_relative_path(asset_id, "files/example.zip").unwrap(),
+            format!("assets/af/{asset_id}/files/example.zip")
+        );
+        assert_eq!(
+            asset_relative_path(asset_id, "cover.png").unwrap(),
+            format!("assets/af/{asset_id}/cover.png")
+        );
+    }
+
+    #[test]
+    fn counts_an_external_database_in_library_capacity() {
+        let root =
+            std::env::temp_dir().join(format!("vr-asset-library-capacity-{}", Uuid::now_v7()));
+        let database_path = root.join("database").join(DATABASE_FILE);
+        fs::create_dir_all(database_path.parent().unwrap()).unwrap();
+        fs::write(&database_path, b"database").unwrap();
+        let locations = StorageLocations {
+            library_root: root.join("library"),
+            asset_storage_root: root.join("assets"),
+            database_backup_root: root.join("backups"),
+            database_path,
+        };
+
+        assert_eq!(capacity_report(&locations).database_bytes, 8);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -3008,17 +3083,12 @@ mod tests {
             std::env::temp_dir().join(format!("vr-asset-library-thumbnail-{}", Uuid::now_v7()));
         let asset_root = root.join("asset-storage");
         let asset_id = Uuid::now_v7().to_string();
-        let source = asset_root.join(format!("assets/{asset_id}/cover.png"));
+        let relative_path = asset_relative_path(&asset_id, "cover.png").unwrap();
+        let source = asset_root.join(&relative_path);
         fs::create_dir_all(source.parent().unwrap()).unwrap();
         DynamicImage::new_rgb8(1600, 900).save(&source).unwrap();
 
-        generate_cached_thumbnail(
-            &root,
-            &asset_root,
-            &asset_id,
-            &format!("assets/{asset_id}/cover.png"),
-        )
-        .unwrap();
+        generate_cached_thumbnail(&root, &asset_root, &asset_id, &relative_path).unwrap();
         fs::remove_file(&source).unwrap();
         let cached = cached_thumbnail_path(&root, &asset_id).unwrap().unwrap();
         let dimensions = image::image_dimensions(&cached).unwrap();
@@ -3073,6 +3143,15 @@ mod tests {
             fs::read_dir(asset_directory.join("files")).unwrap().count(),
             2
         );
+        let stored_path: String = Connection::open(library.join(DATABASE_FILE))
+            .unwrap()
+            .query_row(
+                "SELECT relative_path FROM asset_files WHERE asset_id = ?1 ORDER BY original_filename LIMIT 1",
+                params![result.asset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored_path.starts_with(&asset_relative_directory(&result.asset_id).unwrap()));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "../lib/dialog";
 import { invoke } from "../lib/api";
 import type { Category, Tag } from "../types";
@@ -25,8 +26,57 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [isDropTargetActive, setIsDropTargetActive] = useState(false);
+  const dropTargetRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef(title);
   const showOptional =
     localStorage.getItem("asset-library.show-optional-fields") === "true";
+  useEffect(() => {
+    titleRef.current = title;
+  }, [title]);
+  const addFiles = useCallback((paths: string[]) => {
+    const nextPaths = paths.filter(Boolean);
+    if (!nextPaths.length) return;
+    setFiles((current) => [...new Set([...current, ...nextPaths])]);
+    if (!titleRef.current) setTitle(titleOf(nextPaths[0]));
+  }, []);
+  const isOverDropTarget = useCallback((position: { x: number; y: number }) => {
+    const target = dropTargetRef.current;
+    if (!target) return false;
+    const bounds = target.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+    const x = position.x / scale;
+    const y = position.y / scale;
+    return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
+  }, []);
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow()
+      .onDragDropEvent(({ payload }) => {
+        if (payload.type === "leave") {
+          setIsDropTargetActive(false);
+          return;
+        }
+        const isOverTarget = isOverDropTarget(payload.position);
+        if (payload.type === "enter" || payload.type === "over") {
+          setIsDropTargetActive(isOverTarget);
+          return;
+        }
+        setIsDropTargetActive(false);
+        if (!busy && isOverTarget) addFiles(payload.paths);
+      })
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [addFiles, busy, isOverDropTarget]);
   const choose = async () => {
     try {
       const result = await open({
@@ -34,10 +84,7 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
         title: "登録するファイルを選択",
       });
       const paths = Array.isArray(result) ? result : result ? [result] : [];
-      if (paths.length) {
-        setFiles(paths);
-        if (!title) setTitle(titleOf(paths[0]));
-      }
+      addFiles(paths);
     } catch (reason) {
       onError(String(reason));
     }
@@ -139,9 +186,36 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
         </label>
         <section className="file-select">
           <b>登録ファイル</b>
-          <button className="secondary compact" disabled={busy} onClick={() => void choose()}>
-            ファイルを選択
-          </button>
+          <div
+            ref={dropTargetRef}
+            className={`file-select__drop-target${isDropTargetActive ? " is-dragging" : ""}`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              if (!busy) setIsDropTargetActive(true);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={(event) => {
+              if (
+                !(event.relatedTarget instanceof Node) ||
+                !event.currentTarget.contains(event.relatedTarget)
+              ) {
+                setIsDropTargetActive(false);
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDropTargetActive(false);
+              const paths = Array.from(event.dataTransfer.files)
+                .map((file) => (file as File & { path?: string }).path)
+                .filter((path): path is string => Boolean(path));
+              if (!busy) addFiles(paths);
+            }}
+          >
+            <button className="secondary compact" disabled={busy} onClick={() => void choose()}>
+              ファイルを選択
+            </button>
+            <span>または、このエリア内にドラッグ＆ドロップ</span>
+          </div>
           <p>
             {files.length
               ? files.length + " ファイルを選択中"

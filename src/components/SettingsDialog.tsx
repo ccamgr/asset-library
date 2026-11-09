@@ -105,6 +105,7 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
         <section className="settings-section">
           <h2>ストレージ</h2>
           <p>アセット: {capacity ? bytes(capacity.assetBytes) : "読み込み中…"}</p>
+          <p>ライブDB: {capacity ? bytes(capacity.databaseBytes) : "読み込み中…"}</p>
           <p>DBバックアップ: {capacity ? bytes(capacity.databaseBackupBytes) : "読み込み中…"}</p>
           <button className="secondary" disabled={busy} onClick={() => void rebuildThumbnailCache()}>
             サムネイルキャッシュを再生成

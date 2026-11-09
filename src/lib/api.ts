@@ -128,6 +128,7 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
             ),
           0,
         ),
+        databaseBytes: 0,
         databaseBackupBytes: 0,
       } as T;
     case "rebuild_thumbnail_cache":
