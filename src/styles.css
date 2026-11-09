@@ -198,10 +198,11 @@ textarea { min-height: 104px; resize: vertical; }
 
 .detail-empty { color: var(--color-muted); line-height: 1.7; padding: 36px 0; text-align: center; }
 .detail-head { border-bottom: 3px solid var(--color-text); padding-bottom: 12px; }
+.detail-head-actions { align-items: center; display: flex; gap: 4px; }
 .detail-pane label { font-size: .875rem; margin-top: 20px; }
 .detail-pane label input, .detail-pane label textarea { display: block; margin-top: 6px; width: 100%; }
 .cover-editor { background: var(--color-placeholder); border: 1px solid var(--color-border); border-radius: 0; color: var(--color-text); height: 200px; margin: 20px 0 4px; overflow: hidden; padding: 0; width: 100%; }
-.cover-editor:hover { border: 2px solid var(--color-action); }
+.detail-note { line-height: 1.6; white-space: pre-wrap; }
 .url-field { position: relative; }
 .url-field input { padding-right: 42px; }
 .url-field .icon-button { align-items: center; display: inline-flex; justify-content: center; margin: 0; min-height: 32px; padding: 2px; position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 32px; }

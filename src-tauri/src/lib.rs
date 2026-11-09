@@ -12,6 +12,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use image::{codecs::jpeg::JpegEncoder, DynamicImage};
 use rusqlite::{params, types::Value, Connection};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -311,6 +312,13 @@ struct BackupEntry {
     byte_size: u64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThumbnailCacheRebuildResult {
+    generated: usize,
+    skipped: usize,
+}
+
 #[derive(Debug, Clone)]
 struct StorageLocations {
     library_root: PathBuf,
@@ -368,7 +376,8 @@ fn initialize_library(
             .map_err(|error| error.to_string())?;
     prepare_library(&library_path, &asset_storage_path, &database_backup_path)
         .map_err(|error| error.to_string())?;
-    allow_asset_storage(&app, &asset_storage_path).map_err(|error| error.to_string())?;
+    allow_cover_paths(&app, &library_path, &asset_storage_path)
+        .map_err(|error| error.to_string())?;
 
     let mut settings = state
         .settings
@@ -577,12 +586,12 @@ fn list_assets(
                     COALESCE(product_url, '') || ' ' ||
                     COALESCE(version, '') || ' ' || COALESCE(note, '')
              FROM assets
-             WHERE title LIKE ?1
+             WHERE (title LIKE ?1
                 OR COALESCE(creator, '') LIKE ?1
                 OR COALESCE(source, '') LIKE ?1
                 OR COALESCE(product_url, '') LIKE ?1
                 OR COALESCE(version, '') LIKE ?1
-                OR COALESCE(note, '') LIKE ?1
+                OR COALESCE(note, '') LIKE ?1)
              {filters}
              ORDER BY updated_at DESC, title COLLATE NOCASE
              LIMIT ? OFFSET ?"
@@ -616,13 +625,23 @@ fn list_assets(
         let (id, title, creator, cover_path, search_text) = row;
         let tags = tags_by_asset.remove(&id).unwrap_or_default();
         let categories = categories_by_asset.remove(&id).unwrap_or_default();
+        let cover_path = cover_path.map(|path| {
+            cached_thumbnail_path(
+                &locations.library_root,
+                &locations.asset_storage_root,
+                &id,
+                &path,
+            )
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| display_path(&locations.asset_storage_root.join(path)))
+        });
         assets.push(AssetSummary {
             id,
             title,
             creator,
             search_text,
-            cover_path: cover_path
-                .map(|path| display_path(&locations.asset_storage_root.join(path))),
+            cover_path,
             tags,
             categories,
         });
@@ -794,7 +813,9 @@ fn delete_asset(
         &locations.asset_storage_root,
         &asset_id,
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    remove_cached_thumbnail(&locations.library_root, &asset_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1105,6 +1126,7 @@ fn set_asset_cover(
             let _ = fs::remove_file(old);
         }
     }
+    remove_cached_thumbnail(&locations.library_root, &asset_id);
     Ok(())
 }
 
@@ -1166,6 +1188,47 @@ fn get_capacity_report(
         thumbnail_cache_bytes: directory_size(&locations.library_root.join("thumbnail-cache")),
         database_backup_bytes: directory_size(&locations.database_backup_root),
     })
+}
+
+#[tauri::command]
+fn rebuild_thumbnail_cache(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ThumbnailCacheRebuildResult, String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let cache_root = locations.library_root.join("thumbnail-cache");
+    if cache_root.exists() {
+        fs::remove_dir_all(&cache_root).map_err(|error| error.to_string())?;
+    }
+    fs::create_dir_all(&cache_root).map_err(|error| error.to_string())?;
+
+    let connection = Connection::open(locations.library_root.join(DATABASE_FILE))
+        .map_err(|error| error.to_string())?;
+    let mut statement = connection
+        .prepare("SELECT id, cover_path FROM assets WHERE cover_path IS NOT NULL")
+        .map_err(|error| error.to_string())?;
+    let covers = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    let mut generated = 0;
+    let mut skipped = 0;
+    for (asset_id, cover_path) in covers {
+        match cached_thumbnail_path(
+            &locations.library_root,
+            &locations.asset_storage_root,
+            &asset_id,
+            &cover_path,
+        ) {
+            Ok(Some(_)) => generated += 1,
+            Ok(None) | Err(_) => skipped += 1,
+        }
+    }
+    Ok(ThumbnailCacheRebuildResult { generated, skipped })
 }
 
 #[tauri::command]
@@ -1269,12 +1332,23 @@ fn storage_locations(
     })
 }
 
-fn allow_asset_storage(app: &AppHandle, asset_storage_root: &Path) -> LibraryResult<()> {
+fn allow_cover_paths(
+    app: &AppHandle,
+    library_root: &Path,
+    asset_storage_root: &Path,
+) -> LibraryResult<()> {
     app.asset_protocol_scope()
         .allow_directory(asset_storage_root, true)
         .map_err(|error| {
             LibraryError::Message(format!(
                 "アセット保存先を画像表示用に許可できません: {error}"
+            ))
+        })?;
+    app.asset_protocol_scope()
+        .allow_directory(library_root.join("thumbnail-cache"), true)
+        .map_err(|error| {
+            LibraryError::Message(format!(
+                "サムネイルキャッシュを画像表示用に許可できません: {error}"
             ))
         })
 }
@@ -1462,6 +1536,57 @@ fn cover_data_url(asset_root: &Path, relative_path: &str) -> Option<String> {
     };
     let bytes = fs::read(asset_root.join(relative_path)).ok()?;
     Some(format!("data:{mime};base64,{}", BASE64.encode(bytes)))
+}
+
+fn thumbnail_cache_path(library_root: &Path, asset_id: &str) -> LibraryResult<PathBuf> {
+    validated_asset_id(asset_id)?;
+    Ok(library_root
+        .join("thumbnail-cache")
+        .join(format!("{asset_id}.jpg")))
+}
+
+fn cached_thumbnail_path(
+    library_root: &Path,
+    asset_storage_root: &Path,
+    asset_id: &str,
+    cover_path: &str,
+) -> LibraryResult<Option<String>> {
+    let source = asset_storage_root.join(cover_path);
+    if !source.is_file() {
+        return Ok(None);
+    }
+    let cache_path = thumbnail_cache_path(library_root, asset_id)?;
+    if !cache_path.is_file() {
+        let image = image::open(&source).map_err(|error| {
+            LibraryError::Message(format!("カバー画像を読み取れません: {error}"))
+        })?;
+        let thumbnail = DynamicImage::ImageRgb8(image.thumbnail(480, 360).to_rgb8());
+        let parent = cache_path
+            .parent()
+            .ok_or_else(|| LibraryError::Message("サムネイル保存先が不正です".into()))?;
+        fs::create_dir_all(parent)?;
+        let temporary = cache_path.with_extension("jpg.partial");
+        let result = (|| -> LibraryResult<()> {
+            let output = File::create(&temporary)?;
+            let mut encoder = JpegEncoder::new_with_quality(BufWriter::new(output), 72);
+            encoder.encode_image(&thumbnail).map_err(|error| {
+                LibraryError::Message(format!("サムネイルを作成できません: {error}"))
+            })?;
+            fs::rename(&temporary, &cache_path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result?;
+    }
+    Ok(Some(display_path(&cache_path)))
+}
+
+fn remove_cached_thumbnail(library_root: &Path, asset_id: &str) {
+    if let Ok(path) = thumbnail_cache_path(library_root, asset_id) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn directory_size(path: &Path) -> u64 {
@@ -2246,7 +2371,7 @@ pub fn run() {
                 .asset_storage_path
                 .clone()
                 .unwrap_or_else(|| library_root.join("asset-storage"));
-            allow_asset_storage(app.handle(), &asset_storage_root)
+            allow_cover_paths(app.handle(), &library_root, &asset_storage_root)
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             app.manage(state);
             Ok(())
@@ -2279,6 +2404,7 @@ pub fn run() {
             reveal_asset_file,
             open_external_url,
             get_capacity_report,
+            rebuild_thumbnail_cache,
             create_database_backup,
             list_database_backups,
             restore_database_backup
@@ -2349,6 +2475,31 @@ mod tests {
         connection.execute("INSERT INTO categories (id, name) VALUES ('category-1', 'One'), ('category-2', 'Two')", []).unwrap();
         connection.execute("INSERT INTO asset_categories (asset_id, category_id) VALUES ('asset-1', 'category-1')", []).unwrap();
         assert!(connection.execute("INSERT INTO asset_categories (asset_id, category_id) VALUES ('asset-1', 'category-2')", []).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn creates_a_small_local_thumbnail_cache() {
+        let root =
+            std::env::temp_dir().join(format!("vr-asset-library-thumbnail-{}", Uuid::now_v7()));
+        let asset_root = root.join("asset-storage");
+        let asset_id = Uuid::now_v7().to_string();
+        let source = asset_root.join(format!("assets/{asset_id}/cover.png"));
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        DynamicImage::new_rgb8(1600, 900).save(&source).unwrap();
+
+        let cached = cached_thumbnail_path(
+            &root,
+            &asset_root,
+            &asset_id,
+            &format!("assets/{asset_id}/cover.png"),
+        )
+        .unwrap()
+        .unwrap();
+        let dimensions = image::image_dimensions(&cached).unwrap();
+        assert!(dimensions.0 <= 480);
+        assert!(dimensions.1 <= 360);
+
         fs::remove_dir_all(root).unwrap();
     }
 

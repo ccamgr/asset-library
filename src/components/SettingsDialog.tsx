@@ -10,6 +10,8 @@ type Props = {
   onOpenLegacyImport(): void;
 };
 
+type ThumbnailCacheRebuildResult = { generated: number; skipped: number };
+
 export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
@@ -66,6 +68,23 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
     }
   };
 
+  const rebuildThumbnailCache = async () => {
+    setBusy(true);
+    try {
+      const result = await invoke<ThumbnailCacheRebuildResult>("rebuild_thumbnail_cache");
+      setMessage(
+        result.skipped
+          ? `${result.generated}件のサムネイルを再生成しました（${result.skipped}件をスキップ）`
+          : `${result.generated}件のサムネイルを再生成しました`,
+      );
+      await refresh();
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const updateOptionalFields = (checked: boolean) => {
     setShowOptional(checked);
     localStorage.setItem("asset-library.show-optional-fields", String(checked));
@@ -84,6 +103,9 @@ export function SettingsDialog({ onClose, onOpenLegacyImport }: Props) {
           <h2>ストレージ</h2>
           <p>アセット: {capacity ? bytes(capacity.assetBytes) : "読み込み中…"}</p>
           <p>DBバックアップ: {capacity ? bytes(capacity.databaseBackupBytes) : "読み込み中…"}</p>
+          <button className="secondary" disabled={busy} onClick={() => void rebuildThumbnailCache()}>
+            サムネイルキャッシュを再生成
+          </button>
         </section>
         <section className="settings-section">
           <h2>データベースのバックアップ</h2>

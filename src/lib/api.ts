@@ -128,6 +128,8 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
         ),
         databaseBackupBytes: 0,
       } as T;
+    case "rebuild_thumbnail_cache":
+      return { generated: assets.length, skipped: 0 } as T;
     case "list_database_backups":
       return [] as T;
     case "import_files": {

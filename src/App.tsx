@@ -4,8 +4,8 @@ import { invoke, listen } from "./lib/api";
 import { useContextMenu } from "./lib/context-menu";
 import { openTextDialog } from "./lib/text-dialog";
 import { confirmDialog } from "./lib/confirm-dialog";
-import { nullable } from "./lib/utils";
 import { AssetDialog } from "./components/AssetDialog";
+import { AssetEditDialog } from "./components/AssetEditDialog";
 import { LegacyImportDialog } from "./components/LegacyImportDialog";
 import { SetupScreen } from "./components/SetupScreen";
 import { LibraryPane } from "./components/LibraryPane";
@@ -33,7 +33,6 @@ function App() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selected, setSelected] = useState<Detail | null>(null);
-  const [form, setForm] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
   const [tagFilterIds, setTagFilterIds] = useState<string[]>([]);
   const [tagSearch, setTagSearch] = useState("");
@@ -44,10 +43,9 @@ function App() {
     null,
   );
   const [assetDialogOpen, setAssetDialogOpen] = useState(false);
+  const [assetEditDialogOpen, setAssetEditDialogOpen] = useState(false);
   const [legacyImportOpen, setLegacyImportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [relationTarget, setRelationTarget] = useState("");
-  const [relationType, setRelationType] = useState("related_to");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -99,13 +97,6 @@ function App() {
     }
     const next = await invoke<Detail>("get_asset_detail", { assetId: id });
     setSelected(next);
-    setForm(
-      Object.fromEntries(
-        ["title", "creator", "source", "productUrl", "version", "note"].map(
-          (key) => [key, String(next[key as keyof Detail] ?? "")],
-        ),
-      ),
-    );
   };
   useEffect(() => {
     void refresh().catch((reason: unknown) => setError(String(reason)));
@@ -198,45 +189,6 @@ function App() {
       setBusy(false);
     }
   };
-  const save = async () => {
-    if (!selected) return;
-    setBusy(true);
-    try {
-      await invoke("update_asset", {
-        request: {
-          id: selected.id,
-          title: form.title,
-          creator: nullable(form.creator),
-          source: nullable(form.source),
-          productUrl: nullable(form.productUrl),
-          version: nullable(form.version),
-          note: nullable(form.note),
-        },
-      });
-      setMessage("保存しました");
-      await refresh();
-      await select(selected.id);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const assign = async (kind: "tags" | "categories", ids: string[]) => {
-    if (!selected) return;
-    setBusy(true);
-    try {
-      await invoke(kind === "tags" ? "set_asset_tags" : "set_asset_categories", {
-        request: { assetId: selected.id, ids },
-      });
-      await refresh();
-      await select(selected.id);
-    } catch (reason) {
-      reportFailure(reason);
-    } finally {
-      setBusy(false);
-    }
-  };
   const addEntity = (kind: "tag" | "category") =>
     openTextDialog({
       title: `${kind === "tag" ? "タグ" : "カテゴリー"}を追加`,
@@ -250,49 +202,6 @@ function App() {
         await refresh();
       },
     });
-  const setCover = async () => {
-    if (!selected) return;
-    setBusy(true);
-    try {
-      const result = await open({
-        multiple: false,
-        filters: [
-          { name: "画像", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
-        ],
-      });
-      if (typeof result !== "string") return;
-      await invoke("set_asset_cover", {
-        assetId: selected.id,
-        sourcePath: result,
-      });
-      await refresh();
-      await select(selected.id);
-    } catch (reason) {
-      reportFailure(reason);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const addRelation = async () => {
-    if (!selected || !relationTarget) return;
-    setBusy(true);
-    try {
-      await invoke("add_asset_relation", {
-        request: {
-          sourceAssetId: selected.id,
-          targetAssetId: relationTarget,
-          relationType,
-          note: null,
-        },
-      });
-      setRelationTarget("");
-      await select(selected.id);
-    } catch (reason) {
-      reportFailure(reason);
-    } finally {
-      setBusy(false);
-    }
-  };
   const contextMenuItems = useCallback(
     (event: MouseEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
@@ -481,53 +390,13 @@ function App() {
         />
         <AssetDetailPane
           detail={selected}
-          form={form}
-          setForm={setForm}
-          tags={tags}
-          categories={categories}
-          assets={assets}
-          relationTarget={relationTarget}
-          relationType={relationType}
-          setRelationTarget={setRelationTarget}
-          setRelationType={setRelationType}
           busy={busy}
           onClose={() => setSelected(null)}
-          onCover={setCover}
-          onAssign={assign}
-          onEntity={addEntity}
+          onEdit={() => setAssetEditDialogOpen(true)}
           onReveal={async (fileId) => {
             setBusy(true);
             try {
               await invoke("reveal_asset_file", { fileId });
-            } catch (reason) {
-              reportFailure(reason);
-            } finally {
-              setBusy(false);
-            }
-          }}
-          onDeleteFile={async (fileId) => {
-            if (!(await confirmDialog("ファイルを削除", "このファイルを削除しますか？"))) return;
-            setBusy(true);
-            try {
-              await invoke("delete_asset_file", { fileId });
-              await refresh();
-              if (selected) await select(selected.id);
-            } catch (reason) {
-              reportFailure(reason);
-            } finally {
-              setBusy(false);
-            }
-          }}
-          onAddFiles={async () => {
-            if (!selected) return;
-            setBusy(true);
-            try {
-              const result = await open({ multiple: true, title: "追加するファイルを選択" });
-              const paths = Array.isArray(result) ? result : result ? [result] : [];
-              if (!paths.length) return;
-              await invoke("add_asset_files", { request: { assetId: selected.id, sourcePaths: paths } });
-              await refresh();
-              await select(selected.id);
             } catch (reason) {
               reportFailure(reason);
             } finally {
@@ -544,9 +413,7 @@ function App() {
               setBusy(false);
             }
           }}
-          onRelation={addRelation}
           onSelect={(id) => void select(id).catch(reportFailure)}
-          onSave={save}
           onDeleteAsset={async () => {
             if (!(await confirmDialog("アセットを削除", "アセットと保存ファイルを削除しますか？"))) return;
             if (!selected) return;
@@ -573,6 +440,20 @@ function App() {
             setMessage(text);
             await refresh();
             await select(id);
+          }}
+        />
+      )}
+      {assetEditDialogOpen && selected && (
+        <AssetEditDialog
+          asset={selected}
+          tags={tags}
+          categories={categories}
+          onClose={() => setAssetEditDialogOpen(false)}
+          onDone={async (text) => {
+            setAssetEditDialogOpen(false);
+            setMessage(text);
+            await refresh();
+            await select(selected.id);
           }}
         />
       )}
