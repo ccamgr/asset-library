@@ -1895,13 +1895,11 @@ fn copy_database_snapshot(source_path: &Path, destination_path: &Path) -> Librar
 
 #[cfg(target_os = "windows")]
 fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
-    Command::new("explorer.exe")
-        .arg(
-            path.parent().ok_or_else(|| {
-                LibraryError::Message("ファイルの親フォルダを取得できません".into())
-            })?,
-        )
-        .spawn()?;
+    let folder = path
+        .parent()
+        .ok_or_else(|| LibraryError::Message("ファイルの親フォルダを取得できません".into()))?;
+    let folder = PathBuf::from(display_path(folder).replace('/', "\\"));
+    Command::new("explorer.exe").arg(folder).spawn()?;
     Ok(())
 }
 
