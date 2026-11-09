@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Write},
     path::{Component, Path, PathBuf},
@@ -51,6 +51,9 @@ struct AppState {
     config_path: PathBuf,
     settings: Mutex<AppSettings>,
     legacy_import_running: Arc<AtomicBool>,
+    thumbnail_jobs: Arc<Mutex<VecDeque<ThumbnailJob>>>,
+    thumbnail_job_ids: Arc<Mutex<HashSet<String>>>,
+    thumbnail_worker_running: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -71,6 +74,9 @@ impl AppState {
             config_path,
             settings: Mutex::new(settings),
             legacy_import_running: Arc::new(AtomicBool::new(false)),
+            thumbnail_jobs: Arc::new(Mutex::new(VecDeque::new())),
+            thumbnail_job_ids: Arc::new(Mutex::new(HashSet::new())),
+            thumbnail_worker_running: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -324,6 +330,14 @@ struct StorageLocations {
     library_root: PathBuf,
     asset_storage_root: PathBuf,
     database_backup_root: PathBuf,
+}
+
+#[derive(Clone)]
+struct ThumbnailJob {
+    library_root: PathBuf,
+    asset_storage_root: PathBuf,
+    asset_id: String,
+    cover_path: String,
 }
 
 #[tauri::command]
@@ -625,16 +639,19 @@ fn list_assets(
         let (id, title, creator, cover_path, search_text) = row;
         let tags = tags_by_asset.remove(&id).unwrap_or_default();
         let categories = categories_by_asset.remove(&id).unwrap_or_default();
-        let cover_path = cover_path.map(|path| {
-            cached_thumbnail_path(
+        let cover_path = cover_path.and_then(|path| {
+            let cached = cached_thumbnail_path(
                 &locations.library_root,
                 &locations.asset_storage_root,
                 &id,
                 &path,
             )
             .ok()
-            .flatten()
-            .unwrap_or_else(|| display_path(&locations.asset_storage_root.join(path)))
+            .flatten();
+            if cached.is_none() {
+                schedule_thumbnail_generation(&app, &state, &locations, &id, &path);
+            }
+            cached
         });
         assets.push(AssetSummary {
             id,
@@ -1218,14 +1235,14 @@ fn rebuild_thumbnail_cache(
     let mut generated = 0;
     let mut skipped = 0;
     for (asset_id, cover_path) in covers {
-        match cached_thumbnail_path(
+        match generate_cached_thumbnail(
             &locations.library_root,
             &locations.asset_storage_root,
             &asset_id,
             &cover_path,
         ) {
-            Ok(Some(_)) => generated += 1,
-            Ok(None) | Err(_) => skipped += 1,
+            Ok(()) => generated += 1,
+            Err(_) => skipped += 1,
         }
     }
     Ok(ThumbnailCacheRebuildResult { generated, skipped })
@@ -1557,30 +1574,121 @@ fn cached_thumbnail_path(
     }
     let cache_path = thumbnail_cache_path(library_root, asset_id)?;
     if !cache_path.is_file() {
-        let image = image::open(&source).map_err(|error| {
-            LibraryError::Message(format!("カバー画像を読み取れません: {error}"))
-        })?;
-        let thumbnail = DynamicImage::ImageRgb8(image.thumbnail(480, 360).to_rgb8());
-        let parent = cache_path
-            .parent()
-            .ok_or_else(|| LibraryError::Message("サムネイル保存先が不正です".into()))?;
-        fs::create_dir_all(parent)?;
-        let temporary = cache_path.with_extension("jpg.partial");
-        let result = (|| -> LibraryResult<()> {
-            let output = File::create(&temporary)?;
-            let mut encoder = JpegEncoder::new_with_quality(BufWriter::new(output), 72);
-            encoder.encode_image(&thumbnail).map_err(|error| {
-                LibraryError::Message(format!("サムネイルを作成できません: {error}"))
-            })?;
-            fs::rename(&temporary, &cache_path)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result?;
+        return Ok(None);
+    }
+    let cache_is_current = source.metadata()?.modified()? <= cache_path.metadata()?.modified()?;
+    let cache_is_valid = image::image_dimensions(&cache_path).is_ok();
+    if !cache_is_current || !cache_is_valid {
+        let _ = fs::remove_file(&cache_path);
+        return Ok(None);
     }
     Ok(Some(display_path(&cache_path)))
+}
+
+fn generate_cached_thumbnail(
+    library_root: &Path,
+    asset_storage_root: &Path,
+    asset_id: &str,
+    cover_path: &str,
+) -> LibraryResult<()> {
+    let source = asset_storage_root.join(cover_path);
+    if !source.is_file() {
+        return Err(LibraryError::Message("カバー画像が見つかりません".into()));
+    }
+    let image = image::open(&source)
+        .map_err(|error| LibraryError::Message(format!("カバー画像を読み取れません: {error}")))?;
+    let thumbnail = DynamicImage::ImageRgb8(image.thumbnail(480, 360).to_rgb8());
+    let cache_path = thumbnail_cache_path(library_root, asset_id)?;
+    let parent = cache_path
+        .parent()
+        .ok_or_else(|| LibraryError::Message("サムネイル保存先が不正です".into()))?;
+    fs::create_dir_all(parent)?;
+    let temporary = cache_path.with_extension("jpg.partial");
+    let result = (|| -> LibraryResult<()> {
+        let output = File::create(&temporary)?;
+        let mut encoder = JpegEncoder::new_with_quality(BufWriter::new(output), 72);
+        encoder.encode_image(&thumbnail).map_err(|error| {
+            LibraryError::Message(format!("サムネイルを作成できません: {error}"))
+        })?;
+        fs::rename(&temporary, &cache_path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn schedule_thumbnail_generation(
+    app: &AppHandle,
+    state: &AppState,
+    locations: &StorageLocations,
+    asset_id: &str,
+    cover_path: &str,
+) {
+    let Ok(mut job_ids) = state.thumbnail_job_ids.lock() else {
+        return;
+    };
+    if !job_ids.insert(asset_id.to_owned()) {
+        return;
+    }
+    drop(job_ids);
+    if let Ok(mut jobs) = state.thumbnail_jobs.lock() {
+        jobs.push_back(ThumbnailJob {
+            library_root: locations.library_root.clone(),
+            asset_storage_root: locations.asset_storage_root.clone(),
+            asset_id: asset_id.to_owned(),
+            cover_path: cover_path.to_owned(),
+        });
+    } else {
+        let _ = state
+            .thumbnail_job_ids
+            .lock()
+            .map(|mut ids| ids.remove(asset_id));
+        return;
+    }
+    if state.thumbnail_worker_running.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    run_thumbnail_worker(
+        app.clone(),
+        Arc::clone(&state.thumbnail_jobs),
+        Arc::clone(&state.thumbnail_job_ids),
+        Arc::clone(&state.thumbnail_worker_running),
+    );
+}
+
+fn run_thumbnail_worker(
+    app: AppHandle,
+    jobs: Arc<Mutex<VecDeque<ThumbnailJob>>>,
+    job_ids: Arc<Mutex<HashSet<String>>>,
+    running: Arc<AtomicBool>,
+) {
+    std::thread::spawn(move || loop {
+        let job = jobs.lock().ok().and_then(|mut jobs| jobs.pop_front());
+        let Some(job) = job else {
+            running.store(false, Ordering::Release);
+            if jobs.lock().is_ok_and(|jobs| !jobs.is_empty())
+                && !running.swap(true, Ordering::AcqRel)
+            {
+                continue;
+            }
+            break;
+        };
+        let generated = generate_cached_thumbnail(
+            &job.library_root,
+            &job.asset_storage_root,
+            &job.asset_id,
+            &job.cover_path,
+        )
+        .is_ok();
+        if let Ok(mut ids) = job_ids.lock() {
+            ids.remove(&job.asset_id);
+        }
+        if generated {
+            let _ = app.emit("thumbnail-cache-updated", &job.asset_id);
+        }
+    });
 }
 
 fn remove_cached_thumbnail(library_root: &Path, asset_id: &str) {
@@ -2488,6 +2596,13 @@ mod tests {
         fs::create_dir_all(source.parent().unwrap()).unwrap();
         DynamicImage::new_rgb8(1600, 900).save(&source).unwrap();
 
+        generate_cached_thumbnail(
+            &root,
+            &asset_root,
+            &asset_id,
+            &format!("assets/{asset_id}/cover.png"),
+        )
+        .unwrap();
         let cached = cached_thumbnail_path(
             &root,
             &asset_root,

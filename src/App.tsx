@@ -51,6 +51,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [hasMoreAssets, setHasMoreAssets] = useState(false);
   const assetRequest = useRef(0);
+  const filtersRef = useRef({ query: "", tagIds: [] as string[], categoryId: null as string | null });
+  const thumbnailRefreshTimer = useRef<number | null>(null);
 
   const reportFailure = (reason: unknown) => setError(String(reason));
 
@@ -102,11 +104,28 @@ function App() {
     void refresh().catch((reason: unknown) => setError(String(reason)));
   }, []);
   useEffect(() => {
+    filtersRef.current = { query, tagIds: tagFilterIds, categoryId: categoryFilter };
     const timer = window.setTimeout(() => {
       void loadAssets(query, tagFilterIds, categoryFilter).catch(reportFailure);
     }, 180);
     return () => window.clearTimeout(timer);
   }, [categoryFilter, loadAssets, query, tagFilterIds]);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<string>("thumbnail-cache-updated", () => {
+      if (thumbnailRefreshTimer.current) window.clearTimeout(thumbnailRefreshTimer.current);
+      thumbnailRefreshTimer.current = window.setTimeout(() => {
+        const filters = filtersRef.current;
+        void loadAssets(filters.query, filters.tagIds, filters.categoryId).catch(reportFailure);
+      }, 160);
+    }).then((stop) => {
+      unlisten = stop;
+    });
+    return () => {
+      unlisten?.();
+      if (thumbnailRefreshTimer.current) window.clearTimeout(thumbnailRefreshTimer.current);
+    };
+  }, [loadAssets]);
   const loadMoreAssets = async () => {
     setBusy(true);
     try {
