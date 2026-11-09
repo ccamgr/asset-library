@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ChevronDown, ChevronUp, ExternalLink, FolderOpen, Pencil, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, FileOutput, FolderOpen, Pencil, Trash2, X } from "lucide-react";
 import type { Detail } from "../types";
 import { bytes } from "../lib/utils";
 
@@ -11,11 +11,12 @@ type Props = {
   onEdit(): void;
   onDeleteAsset(): void;
   onReveal(fileId: string): void;
+  onOpenFile(fileId: string): void;
   onUrl(url: string): void;
   onSelect(id: string): void;
 };
 
-export function AssetDetailPane({ detail, busy, onClose, onEdit, onDeleteAsset, onReveal, onUrl, onSelect }: Props) {
+export function AssetDetailPane({ detail, busy, onClose, onEdit, onDeleteAsset, onReveal, onOpenFile, onUrl, onSelect }: Props) {
   const [noteExpanded, setNoteExpanded] = useState(false);
   const [noteOverflows, setNoteOverflows] = useState(false);
   const noteRef = useRef<HTMLParagraphElement>(null);
@@ -47,8 +48,8 @@ export function AssetDetailPane({ detail, busy, onClose, onEdit, onDeleteAsset, 
       <section className="detail-section"><b>カテゴリー</b><div className="chip-row">{detail.categories.map((category) => <span className="chip" key={category.id}>{category.name}</span>)}</div></section>
       <section className="detail-section"><b>タグ</b><div className="chip-row">{detail.tags.map((tag) => <span className="chip" key={tag.id}>{tag.name}</span>)}</div></section>
       <section className="detail-section">
-        <b>ファイル</b>
-        {detail.files.map((file) => <div className="file-row" key={file.id}><span>{file.originalFilename}<small>{bytes(file.byteSize)}</small></span><button className="secondary compact" aria-label="ファイルの場所を開く" onClick={() => onReveal(file.id)}><FolderOpen aria-hidden="true" size={18} /></button></div>)}
+        <div className="side-title"><b>ファイル</b><button className="icon-button" aria-label="ファイルの保存先を開く" disabled={busy || !detail.files.length} onClick={() => onReveal(detail.id)}><FolderOpen aria-hidden="true" size={18} /></button></div>
+        {detail.files.map((file) => <div className="file-row" key={file.id}><span>{file.originalFilename}<small>{bytes(file.byteSize)}</small></span><button className="icon-button" aria-label={`${file.originalFilename}を既定のアプリで開く`} disabled={busy} onClick={() => onOpenFile(file.id)}><FileOutput aria-hidden="true" size={18} /></button></div>)}
       </section>
       <section className="detail-section">
         <b>ノート</b>

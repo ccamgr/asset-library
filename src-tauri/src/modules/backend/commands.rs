@@ -48,6 +48,8 @@ pub(super) fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         delete_asset_file,
         get_asset_file_path,
         reveal_asset_file,
+        reveal_asset_directory,
+        open_asset_file,
         open_external_url,
         get_capacity_report,
         rebuild_thumbnail_cache,

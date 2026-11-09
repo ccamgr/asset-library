@@ -99,6 +99,32 @@ pub(super) fn open_with_default_application(target: &str) -> LibraryResult<()> {
     Ok(())
 }
 
+pub(super) fn open_directory_in_file_manager(directory: &Path) -> LibraryResult<()> {
+    if !directory.is_dir() {
+        return Err(LibraryError::Message("フォルダが見つかりません".into()));
+    }
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        command.arg(PathBuf::from(display_path(directory).replace('/', "\\")));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(directory);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(directory);
+        command
+    };
+    command.spawn()?;
+    Ok(())
+}
+
 pub(super) fn validate_storage_path(input: &str, label: &str) -> LibraryResult<PathBuf> {
     let trimmed = input.trim();
     if trimmed.is_empty() {

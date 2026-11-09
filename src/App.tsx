@@ -445,10 +445,20 @@ function App() {
           busy={busy}
           onClose={() => setSelected(null)}
           onEdit={() => setAssetEditDialogOpen(true)}
-          onReveal={async (fileId) => {
+          onReveal={async (assetId) => {
             setBusy(true);
             try {
-              await invoke("reveal_asset_file", { fileId });
+              await invoke("reveal_asset_directory", { assetId });
+            } catch (reason) {
+              reportFailure(reason);
+            } finally {
+              setBusy(false);
+            }
+          }}
+          onOpenFile={async (fileId) => {
+            setBusy(true);
+            try {
+              await invoke("open_asset_file", { fileId });
             } catch (reason) {
               reportFailure(reason);
             } finally {

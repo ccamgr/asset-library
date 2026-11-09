@@ -106,6 +106,48 @@ pub(crate) fn reveal_asset_file(
 }
 
 #[tauri::command]
+pub(crate) fn reveal_asset_directory(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    asset_id: String,
+) -> Result<(), String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    let directory = asset_files_directory(&locations.asset_storage_root, &asset_id)
+        .map_err(|error| error.to_string())?;
+    if !directory.is_dir() {
+        return Err("アセットの保存先が見つかりません".into());
+    }
+    state.log(format!(
+        "asset directory reveal started asset_id={asset_id} path={directory:?}"
+    ));
+    open_directory_in_file_manager(&directory).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn open_asset_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    file_id: String,
+) -> Result<(), String> {
+    let log_path = state.log_path.clone();
+    state.log(format!("file open requested file_id={file_id}"));
+    let path = get_asset_file_path(app, state, file_id)?;
+    match open_with_default_application(&path) {
+        Ok(()) => {
+            append_log(&log_path, &format!("file open started path={path:?}"));
+            Ok(())
+        }
+        Err(error) => {
+            append_log(
+                &log_path,
+                &format!("file open failed path={path:?} reason={error}"),
+            );
+            Err(error.to_string())
+        }
+    }
+}
+
+#[tauri::command]
 pub(crate) fn open_external_url(url: String) -> Result<(), String> {
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
