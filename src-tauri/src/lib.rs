@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Write},
     path::{Component, Path, PathBuf},
     process::Command,
@@ -27,6 +27,8 @@ use utils::{display_path, non_empty_name, optional_text};
 
 const SETTINGS_FILE: &str = "settings.json";
 const DATABASE_FILE: &str = "library.db";
+const LOG_DIRECTORY: &str = "logs";
+const LOG_FILE: &str = "asset-library.log";
 
 #[derive(Debug, Error)]
 enum LibraryError {
@@ -63,6 +65,7 @@ struct WindowState {
 
 struct AppState {
     config_path: PathBuf,
+    log_path: PathBuf,
     settings: Mutex<AppSettings>,
     legacy_import_running: Arc<AtomicBool>,
     thumbnail_jobs: Arc<Mutex<VecDeque<ThumbnailJob>>>,
@@ -76,6 +79,8 @@ impl AppState {
             LibraryError::Message(format!("設定フォルダを取得できません: {error}"))
         })?;
         fs::create_dir_all(&config_dir)?;
+        let log_directory = config_dir.join(LOG_DIRECTORY);
+        fs::create_dir_all(&log_directory)?;
 
         let config_path = config_dir.join(SETTINGS_FILE);
         let settings = match fs::read_to_string(&config_path) {
@@ -86,6 +91,7 @@ impl AppState {
 
         Ok(Self {
             config_path,
+            log_path: log_directory.join(LOG_FILE),
             settings: Mutex::new(settings),
             legacy_import_running: Arc::new(AtomicBool::new(false)),
             thumbnail_jobs: Arc::new(Mutex::new(VecDeque::new())),
@@ -100,6 +106,17 @@ impl AppState {
         fs::write(&temporary_path, contents)?;
         fs::rename(temporary_path, &self.config_path)?;
         Ok(())
+    }
+
+    fn log(&self, event: impl AsRef<str>) {
+        append_log(&self.log_path, event.as_ref());
+    }
+}
+
+fn append_log(path: &Path, event: &str) {
+    let sanitized = event.replace(['\r', '\n'], " ");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{}\t{}", unix_timestamp(), sanitized);
     }
 }
 
@@ -484,11 +501,17 @@ fn initialize_library(
         .settings
         .lock()
         .map_err(|_| "設定のロックに失敗しました".to_string())?;
-    settings.asset_storage_path = Some(asset_storage_path);
-    settings.database_backup_path = Some(database_backup_path);
+    settings.asset_storage_path = Some(asset_storage_path.clone());
+    settings.database_backup_path = Some(database_backup_path.clone());
     state
         .save_settings(&settings)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    state.log(format!(
+        "library initialized asset_storage={} database_backups={}",
+        display_path(&asset_storage_path),
+        display_path(&database_backup_path)
+    ));
+    Ok(())
 }
 
 #[tauri::command]
@@ -509,6 +532,11 @@ fn import_files(
 
     let tag_ids = request.tag_ids.clone();
     let category_ids = request.category_ids.clone();
+    let title = request.title.clone();
+    let file_count = request.source_paths.len();
+    state.log(format!(
+        "asset import started title={title:?} files={file_count}"
+    ));
     let result = import_into_library(&library_path, &asset_storage_path, request)
         .map_err(|error| error.to_string())?;
     if let Err(error) = assign_import_labels(
@@ -522,8 +550,16 @@ fn import_files(
             &asset_storage_path,
             &result.asset_id,
         );
+        state.log(format!(
+            "asset import failed asset_id={} reason={error}",
+            result.asset_id
+        ));
         return Err(error.to_string());
     }
+    state.log(format!(
+        "asset import completed asset_id={} files={file_count}",
+        result.asset_id
+    ));
     Ok(result)
 }
 
@@ -548,9 +584,19 @@ fn start_legacy_import(
     if running.swap(true, Ordering::AcqRel) {
         return Err("旧形式ZIPの取り込みはすでに実行中です".into());
     }
+    let log_path = state.log_path.clone();
+    append_log(
+        &log_path,
+        &format!(
+            "legacy ZIP import started directories={} tags={} categories={}",
+            request.directory_paths.len(),
+            request.tag_ids.len(),
+            request.category_ids.len()
+        ),
+    );
 
     std::thread::spawn(move || {
-        let result = import_legacy_batch(&app, &locations, request);
+        let result = import_legacy_batch(&app, &locations, request, &log_path);
         let complete = match result {
             Ok(result) => LegacyImportComplete {
                 result: Some(result),
@@ -561,6 +607,17 @@ fn start_legacy_import(
                 error: Some(error.to_string()),
             },
         };
+        append_log(
+            &log_path,
+            &format!(
+                "legacy ZIP import {}",
+                if complete.error.is_some() {
+                    "failed"
+                } else {
+                    "completed"
+                }
+            ),
+        );
         running.store(false, Ordering::Release);
         let _ = app.emit("legacy-import-complete", complete);
     });
@@ -571,12 +628,14 @@ fn import_legacy_batch(
     app: &AppHandle,
     locations: &StorageLocations,
     request: LegacyBatchImportRequest,
+    log_path: &Path,
 ) -> LibraryResult<LegacyDirectoryImportResult> {
     let mut archives = Vec::new();
     for directory_path in request.directory_paths {
         archives.extend(legacy_archives(Path::new(directory_path.trim()))?);
     }
     let total = archives.len();
+    append_log(log_path, &format!("legacy ZIP import archives={total}"));
     let mut imported = Vec::new();
     let mut failures = Vec::new();
     for (index, archive) in archives.into_iter().enumerate() {
@@ -599,17 +658,36 @@ fn import_legacy_batch(
                         &result.asset_id,
                     );
                     failures.push(LegacyImportFailure {
-                        source_filename,
+                        source_filename: source_filename.clone(),
                         reason: format!("ラベルの設定に失敗しました: {error}"),
                     });
+                    append_log(
+                        log_path,
+                        &format!(
+                            "legacy ZIP import failed archive={source_filename:?} reason={error}"
+                        ),
+                    );
                 } else {
+                    append_log(
+                        log_path,
+                        &format!(
+                            "legacy ZIP import completed archive={source_filename:?} asset_id={}",
+                            result.asset_id
+                        ),
+                    );
                     imported.push(result);
                 }
             }
-            Err(error) => failures.push(LegacyImportFailure {
-                source_filename,
-                reason: error.to_string(),
-            }),
+            Err(error) => {
+                append_log(
+                    log_path,
+                    &format!("legacy ZIP import failed archive={source_filename:?} reason={error}"),
+                );
+                failures.push(LegacyImportFailure {
+                    source_filename,
+                    reason: error.to_string(),
+                });
+            }
         }
         let _ = app.emit(
             "legacy-import-progress",
@@ -772,6 +850,7 @@ fn update_asset(
     state: State<'_, AppState>,
     request: AssetUpdateRequest,
 ) -> Result<(), String> {
+    state.log(format!("asset update started asset_id={}", request.id));
     if request.title.trim().is_empty() {
         return Err("アセット名を入力してください".into());
     }
@@ -797,6 +876,7 @@ fn update_asset(
     if changed == 0 {
         return Err("アセットが見つかりません".into());
     }
+    state.log(format!("asset updated asset_id={}", request.id));
     Ok(())
 }
 
@@ -1273,8 +1353,22 @@ fn reveal_asset_file(
     state: State<'_, AppState>,
     file_id: String,
 ) -> Result<(), String> {
+    let log_path = state.log_path.clone();
+    state.log(format!("file reveal requested file_id={file_id}"));
     let path = get_asset_file_path(app, state, file_id)?;
-    reveal_in_file_manager(Path::new(&path)).map_err(|error| error.to_string())
+    match reveal_in_file_manager(Path::new(&path)) {
+        Ok(()) => {
+            append_log(&log_path, &format!("file reveal started path={path:?}"));
+            Ok(())
+        }
+        Err(error) => {
+            append_log(
+                &log_path,
+                &format!("file reveal failed path={path:?} reason={error}"),
+            );
+            Err(error.to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -1801,9 +1895,12 @@ fn copy_database_snapshot(source_path: &Path, destination_path: &Path) -> Librar
 
 #[cfg(target_os = "windows")]
 fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
-    let path = path.canonicalize()?;
     Command::new("explorer.exe")
-        .arg(format!("/select,{}", display_path(&path)))
+        .arg(
+            path.parent().ok_or_else(|| {
+                LibraryError::Message("ファイルの親フォルダを取得できません".into())
+            })?,
+        )
         .spawn()?;
     Ok(())
 }
@@ -2547,6 +2644,7 @@ pub fn run() {
         .setup(|app| {
             let state = AppState::load(app.handle())
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            state.log("application started");
             let library_root = default_library_path(app.handle())
                 .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
             let asset_storage_root = state
@@ -2870,6 +2968,20 @@ mod tests {
         copy_database_snapshot(&library.join(DATABASE_FILE), &snapshot).unwrap();
         assert_eq!(count_assets(&snapshot).unwrap(), 1);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn appends_sanitized_log_events() {
+        let root = std::env::temp_dir().join(format!("vr-asset-library-log-{}", Uuid::now_v7()));
+        fs::create_dir_all(&root).unwrap();
+        let log_path = root.join("asset-library.log");
+
+        append_log(&log_path, "operation started\nwith details");
+
+        let contents = fs::read_to_string(&log_path).unwrap();
+        assert!(contents.contains("operation started with details"));
+        assert_eq!(contents.lines().count(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 }
