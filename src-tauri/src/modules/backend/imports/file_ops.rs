@@ -86,15 +86,13 @@ pub(crate) fn insert_imported_asset(
     let transaction = connection.transaction()?;
     let timestamp = unix_timestamp();
     transaction.execute(
-        "INSERT INTO assets (id, title, creator, source, product_url, version, note, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        "INSERT INTO assets (id, title, creator, product_url, note, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
         params![
             asset_id,
             title,
             request.and_then(|value| value.creator.as_deref()),
-            request.and_then(|value| value.source.as_deref()),
             request.and_then(|value| value.product_url.as_deref()),
-            request.and_then(|value| value.version.as_deref()),
             request.and_then(|value| value.note.as_deref()),
             timestamp,
         ],
@@ -138,7 +136,7 @@ pub(crate) fn insert_legacy_imported_asset(
     let connection = Connection::open(database_path)?;
     connection.execute(
         "UPDATE assets
-         SET source = 'legacy archive import', product_url = ?1, note = ?2,
+         SET product_url = ?1, note = ?2,
              cover_path = ?3, updated_at = ?4
          WHERE id = ?5",
         params![

@@ -7,8 +7,8 @@ type AssetDetailRow = (
     Option<String>,
     Option<String>,
     Option<String>,
-    Option<String>,
-    Option<String>,
+    i64,
+    i64,
 );
 
 pub(super) fn default_library_path(app: &AppHandle) -> LibraryResult<PathBuf> {
@@ -173,8 +173,8 @@ pub(super) fn asset_detail(
     asset_storage_root: &Path,
     asset_id: &str,
 ) -> LibraryResult<AssetDetail> {
-    let (id, title, creator, source, product_url, version, note, cover_path): AssetDetailRow = connection.query_row(
-        "SELECT id, title, creator, source, product_url, version, note, cover_path FROM assets WHERE id=?1",
+    let (id, title, creator, product_url, note, cover_path, created_at, updated_at): AssetDetailRow = connection.query_row(
+        "SELECT id, title, creator, product_url, note, cover_path, created_at, updated_at FROM assets WHERE id=?1",
         params![asset_id],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
     )?;
@@ -220,10 +220,10 @@ pub(super) fn asset_detail(
         id,
         title,
         creator,
-        source,
         product_url,
-        version,
         note,
+        created_at,
+        updated_at,
         cover_path: cover_path.and_then(|path| {
             cached_thumbnail_path(library_root, asset_id)
                 .ok()

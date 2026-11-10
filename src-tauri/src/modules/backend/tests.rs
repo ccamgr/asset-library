@@ -121,6 +121,8 @@ fn migrates_shop_url_into_the_single_product_url() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert!(!columns.iter().any(|column| column == "shop_url"));
+    assert!(!columns.iter().any(|column| column == "source"));
+    assert!(!columns.iter().any(|column| column == "version"));
     fs::remove_file(database).unwrap();
 }
 
@@ -205,9 +207,7 @@ fn imports_multiple_files_into_an_asset_directory() {
                 display_path(&source.join("readme.txt")),
             ],
             creator: None,
-            source: None,
             product_url: None,
-            version: None,
             note: None,
             tag_ids: vec![],
             category_ids: vec![],
@@ -353,9 +353,7 @@ fn database_snapshot_contains_imported_assets() {
             title: "Backup test".into(),
             source_paths: vec![display_path(&source)],
             creator: None,
-            source: None,
             product_url: None,
-            version: None,
             note: None,
             tag_ids: vec![],
             category_ids: vec![],

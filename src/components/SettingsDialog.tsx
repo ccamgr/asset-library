@@ -21,9 +21,8 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false);
-  const [showOptional, setShowOptional] = useState(
-    () => localStorage.getItem("asset-library.show-optional-fields") === "true",
-  );
+  const [boothImportCategories, setBoothImportCategories] = useState(false);
+  const [boothImportTags, setBoothImportTags] = useState(false);
 
   const refresh = async () => {
     const [nextCapacity, nextBackups] = await Promise.all([
@@ -36,6 +35,9 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
 
   useEffect(() => {
     void refresh().catch((error) => onError(String(error)));
+    void invoke<{ importCategories: boolean; importTags: boolean }>("get_booth_import_settings")
+      .then((settings) => { setBoothImportCategories(settings.importCategories); setBoothImportTags(settings.importTags); })
+      .catch((error) => onError(String(error)));
   }, []);
 
   const createBackup = async () => {
@@ -88,9 +90,12 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
     }
   };
 
-  const updateOptionalFields = (checked: boolean) => {
-    setShowOptional(checked);
-    localStorage.setItem("asset-library.show-optional-fields", String(checked));
+  const updateBoothImportSettings = async (categories: boolean, tags: boolean) => {
+    try {
+      await invoke("set_booth_import_settings", { request: { importCategories: categories, importTags: tags } });
+      setBoothImportCategories(categories);
+      setBoothImportTags(tags);
+    } catch (error) { onError(String(error)); }
   };
 
   return (
@@ -135,11 +140,18 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
           </button>
         </section>
         <section className="settings-section">
-          <h2>表示項目</h2>
+          <h2>BOOTHメタデータ取得</h2>
           <label className="check">
-            <input type="checkbox" checked={showOptional} onChange={(event) => updateOptionalFields(event.target.checked)} />
-            配布元・バージョンを表示
+            <input type="checkbox" checked={boothImportCategories} onChange={(event) => void updateBoothImportSettings(event.target.checked, boothImportTags)} />
+            BOOTHのカテゴリを反映する
           </label>
+          <label className="check">
+            <input type="checkbox" checked={boothImportTags} onChange={(event) => void updateBoothImportSettings(boothImportCategories, event.target.checked)} />
+            BOOTHのタグを反映する
+          </label>
+        </section>
+        <section className="settings-section">
+          <h2>表示項目</h2>
           <fieldset className="library-view-size">
             <legend>ライブラリ一覧の大きさ</legend>
             {(["large", "medium", "small"] as const).map((size) => (

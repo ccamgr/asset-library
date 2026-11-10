@@ -37,15 +37,12 @@ pub(crate) fn list_assets(
     let mut statement = connection
         .prepare(&format!(
             "SELECT id, title, creator, cover_path,
-                    title || ' ' || COALESCE(creator, '') || ' ' || COALESCE(source, '') || ' ' ||
-                    COALESCE(product_url, '') || ' ' ||
-                    COALESCE(version, '') || ' ' || COALESCE(note, '')
+                    title || ' ' || COALESCE(creator, '') || ' ' ||
+                    COALESCE(product_url, '') || ' ' || COALESCE(note, '')
              FROM assets
              WHERE (title LIKE ?1
                 OR COALESCE(creator, '') LIKE ?1
-                OR COALESCE(source, '') LIKE ?1
                 OR COALESCE(product_url, '') LIKE ?1
-                OR COALESCE(version, '') LIKE ?1
                 OR COALESCE(note, '') LIKE ?1)
              {filters}
              ORDER BY updated_at DESC, title COLLATE NOCASE
@@ -135,15 +132,13 @@ pub(crate) fn update_asset(
         Connection::open(&locations.database_path).map_err(|error| error.to_string())?;
     let changed = connection
         .execute(
-            "UPDATE assets SET title=?2, creator=?3, source=?4, product_url=?5,
-             version=?6, note=?7, updated_at=?8 WHERE id=?1",
+            "UPDATE assets SET title=?2, creator=?3, product_url=?4,
+             note=?5, updated_at=?6 WHERE id=?1",
             params![
                 request.id,
                 request.title.trim(),
                 optional_text(request.creator),
-                optional_text(request.source),
                 optional_text(request.product_url),
-                optional_text(request.version),
                 optional_text(request.note),
                 unix_timestamp(),
             ],

@@ -30,9 +30,7 @@ pub(super) struct ImportRequest {
     pub(super) title: String,
     pub(super) source_paths: Vec<String>,
     pub(super) creator: Option<String>,
-    pub(super) source: Option<String>,
     pub(super) product_url: Option<String>,
-    pub(super) version: Option<String>,
     pub(super) note: Option<String>,
     #[serde(default)]
     pub(super) tag_ids: Vec<String>,
@@ -141,10 +139,10 @@ pub(super) struct AssetDetail {
     pub(super) id: String,
     pub(super) title: String,
     pub(super) creator: Option<String>,
-    pub(super) source: Option<String>,
     pub(super) product_url: Option<String>,
-    pub(super) version: Option<String>,
     pub(super) note: Option<String>,
+    pub(super) created_at: i64,
+    pub(super) updated_at: i64,
     pub(super) cover_path: Option<String>,
     pub(super) tags: Vec<Tag>,
     pub(super) categories: Vec<Category>,
@@ -158,10 +156,38 @@ pub(super) struct AssetUpdateRequest {
     pub(super) id: String,
     pub(super) title: String,
     pub(super) creator: Option<String>,
-    pub(super) source: Option<String>,
     pub(super) product_url: Option<String>,
-    pub(super) version: Option<String>,
     pub(super) note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothMetadataRequest {
+    pub(super) product_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothMetadata {
+    pub(super) title: String,
+    pub(super) creator: Option<String>,
+    pub(super) note: Option<String>,
+    pub(super) category: Option<String>,
+    pub(super) tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothImportSettings {
+    pub(super) import_categories: bool,
+    pub(super) import_tags: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothImportSettingsRequest {
+    pub(super) import_categories: bool,
+    pub(super) import_tags: bool,
 }
 
 #[derive(Debug, Deserialize)]

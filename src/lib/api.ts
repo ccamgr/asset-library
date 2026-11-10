@@ -45,10 +45,10 @@ const assets: AnyRecord[] = mockAssets.map(([title, creator, category], index) =
     id,
     title,
     creator,
-    source: "BOOTH",
     productUrl: `https://booth.pm/ja/items/${1000 + index}`,
-    version: index % 3 === 0 ? "1.1.0" : "1.0.0",
     note: index === 0 ? "モックデータ" : "ブラウザプレビュー用のサンプルアセット",
+    createdAt: 1_794_000_000 + index,
+    updatedAt: 1_794_000_000 + index,
     coverPath: null,
     tags: category ? [tags[0], ...(index % 2 === 0 ? [tags[1]] : [])] : [],
     categories: [categories[category]],
@@ -73,7 +73,6 @@ const summary = (asset: AnyRecord) => ({
   searchText: [
     asset.title,
     asset.creator,
-    asset.source,
     asset.productUrl,
     asset.note,
   ]
@@ -117,6 +116,12 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
       return tags as T;
     case "list_categories":
       return categories as T;
+    case "get_booth_import_settings":
+      return { importCategories: false, importTags: false } as T;
+    case "set_booth_import_settings":
+      return undefined as T;
+    case "fetch_booth_metadata":
+      return { title: "BOOTHメタデータのサンプル", creator: "サンプルショップ", note: "BOOTHから取得した説明です。", category: null, tags: [] } as T;
     case "get_capacity_report":
       return {
         assetBytes: assets.reduce(
@@ -141,10 +146,10 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
         id,
         title: data.title,
         creator: data.creator ?? null,
-        source: data.source ?? null,
         productUrl: data.productUrl ?? null,
-        version: data.version ?? null,
         note: data.note ?? null,
+        createdAt: Math.floor(Date.now() / 1000),
+        updatedAt: Math.floor(Date.now() / 1000),
         coverPath: null,
         tags: tags.filter((tag) => (data.tagIds ?? []).includes(tag.id)),
         categories: categories.filter((category) =>

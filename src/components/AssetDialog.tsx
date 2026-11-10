@@ -4,7 +4,7 @@ import { open } from "../lib/dialog";
 import { invoke } from "../lib/api";
 import type { Category, Tag } from "../types";
 import { AssetLabels } from "./AssetLabels";
-import { X } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { nameOf, titleOf } from "../lib/utils";
 
 type Props = {
@@ -16,11 +16,11 @@ type Props = {
 };
 
 export function AssetDialog({ tags, categories, onClose, onDone, onError }: Props) {
+  const [availableTags, setAvailableTags] = useState(tags);
+  const [availableCategories, setAvailableCategories] = useState(categories);
   const [files, setFiles] = useState<string[]>([]);
   const [title, setTitle] = useState("");
   const [creator, setCreator] = useState("");
-  const [source, setSource] = useState("");
-  const [version, setVersion] = useState("");
   const [productUrl, setProductUrl] = useState("");
   const [note, setNote] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
@@ -29,8 +29,32 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
   const [isDropTargetActive, setIsDropTargetActive] = useState(false);
   const dropTargetRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef(title);
-  const showOptional =
-    localStorage.getItem("asset-library.show-optional-fields") === "true";
+  const isBoothUrl = /^(https?:\/\/)?(?:[\w-]+\.)?booth\.pm\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/\d+(?:\.json)?(?:[/?#].*)?$/i.test(productUrl.trim());
+  const fetchBoothMetadata = async () => {
+    setBusy(true);
+    try {
+      const metadata = await invoke<{ title: string; creator: string | null; note: string | null; category: string | null; tags: string[] }>("fetch_booth_metadata", { request: { productUrl } });
+      setTitle(metadata.title);
+      setCreator(metadata.creator ?? "");
+      setNote(metadata.note ?? "");
+      if (metadata.category) {
+        let category = availableCategories.find((item) => item.name.localeCompare(metadata.category!, undefined, { sensitivity: "accent" }) === 0);
+        if (!category) {
+          category = await invoke<Category>("create_category", { request: { name: metadata.category, color: null } });
+          setAvailableCategories((current) => [...current, category!]);
+        }
+        if (category) setCategoryIds([category.id]);
+      }
+      const matchedTags = await Promise.all(metadata.tags.map(async (name) => {
+        const existing = availableTags.find((tag) => tag.name.localeCompare(name, undefined, { sensitivity: "accent" }) === 0);
+        if (existing) return existing.id;
+        const tag = await invoke<Tag>("create_tag", { request: { name, color: null } });
+        setAvailableTags((current) => [...current, tag]);
+        return tag.id;
+      }));
+      if (matchedTags.length) setTagIds((current) => [...new Set([...current, ...matchedTags])]);
+    } catch (reason) { onError(String(reason)); } finally { setBusy(false); }
+  };
   useEffect(() => {
     titleRef.current = title;
   }, [title]);
@@ -103,8 +127,6 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
             title,
             sourcePaths: files,
             creator: creator.trim() || null,
-            source: source.trim() || null,
-            version: version.trim() || null,
             productUrl: productUrl.trim() || null,
             note: note.trim() || null,
             tagIds,
@@ -155,30 +177,9 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
             />
           </label>
           <label>
-            商品URL
-            <input
-              value={productUrl}
-              onChange={(e) => setProductUrl(e.target.value)}
-            />
+            <span className="field-label">商品URL{isBoothUrl && <button type="button" className="secondary url-fetch-button" disabled={busy} onClick={() => void fetchBoothMetadata()}><Download aria-hidden="true" size={14} /> URLから取得</button>}</span>
+            <input value={productUrl} onChange={(e) => setProductUrl(e.target.value)} />
           </label>
-          {showOptional && (
-            <>
-              <label>
-                配布元
-                <input
-                  value={source}
-                  onChange={(event) => setSource(event.target.value)}
-                />
-              </label>
-              <label>
-                バージョン
-                <input
-                  value={version}
-                  onChange={(event) => setVersion(event.target.value)}
-                />
-              </label>
-            </>
-          )}
         </div>
         <label>
           メモ
@@ -228,8 +229,8 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
           </ul>
         </section>
         <AssetLabels
-          tags={tags}
-          categories={categories}
+          tags={availableTags}
+          categories={availableCategories}
           tagIds={tagIds}
           categoryIds={categoryIds}
           setTagIds={setTagIds}

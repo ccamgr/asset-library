@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { Download, Plus, Trash2, X } from "lucide-react";
 import { open } from "../lib/dialog";
 import { invoke } from "../lib/api";
 import type { Category, Detail, Tag } from "../types";
@@ -19,10 +19,10 @@ type Props = {
 const optional = (value: string) => value.trim() || null;
 
 export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onError, onAddTag }: Props) {
+  const [availableTags, setAvailableTags] = useState(tags);
+  const [availableCategories, setAvailableCategories] = useState(categories);
   const [title, setTitle] = useState(asset.title);
   const [creator, setCreator] = useState(asset.creator ?? "");
-  const [source, setSource] = useState(asset.source ?? "");
-  const [version, setVersion] = useState(asset.version ?? "");
   const [productUrl, setProductUrl] = useState(asset.productUrl ?? "");
   const [note, setNote] = useState(asset.note ?? "");
   const [tagIds, setTagIds] = useState(asset.tags.map((tag) => tag.id));
@@ -31,7 +31,33 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
   const [filesToAdd, setFilesToAdd] = useState<string[]>([]);
   const [fileIdsToDelete, setFileIdsToDelete] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const showOptional = localStorage.getItem("asset-library.show-optional-fields") === "true";
+  const isBoothUrl = /^(https?:\/\/)?(?:[\w-]+\.)?booth\.pm\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/\d+(?:\.json)?(?:[/?#].*)?$/i.test(productUrl.trim());
+
+  const fetchBoothMetadata = async () => {
+    setBusy(true);
+    try {
+      const metadata = await invoke<{ title: string; creator: string | null; note: string | null; category: string | null; tags: string[] }>("fetch_booth_metadata", { request: { productUrl } });
+      setTitle(metadata.title);
+      setCreator(metadata.creator ?? "");
+      setNote(metadata.note ?? "");
+      if (metadata.category) {
+        let category = availableCategories.find((item) => item.name.localeCompare(metadata.category!, undefined, { sensitivity: "accent" }) === 0);
+        if (!category) {
+          category = await invoke<Category>("create_category", { request: { name: metadata.category, color: null } });
+          setAvailableCategories((current) => [...current, category!]);
+        }
+        if (category) setCategoryIds([category.id]);
+      }
+      const ids = await Promise.all(metadata.tags.map(async (name) => {
+        const existing = availableTags.find((tag) => tag.name.localeCompare(name, undefined, { sensitivity: "accent" }) === 0);
+        if (existing) return existing.id;
+        const tag = await invoke<Tag>("create_tag", { request: { name, color: null } });
+        setAvailableTags((current) => [...current, tag]);
+        return tag.id;
+      }));
+      if (ids.length) setTagIds((current) => [...new Set([...current, ...ids])]);
+    } catch (reason) { onError(String(reason)); } finally { setBusy(false); }
+  };
 
   const submit = async () => {
     if (!title.trim()) {
@@ -45,9 +71,7 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
           id: asset.id,
           title,
           creator: optional(creator),
-          source: optional(source),
           productUrl: optional(productUrl),
-          version: optional(version),
           note: optional(note),
         },
       });
@@ -104,11 +128,10 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
         <div className="dialog-grid">
           <label>アセット名<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label>作者<input value={creator} onChange={(event) => setCreator(event.target.value)} /></label>
-          <label>商品URL<input value={productUrl} onChange={(event) => setProductUrl(event.target.value)} /></label>
-          {showOptional && <><label>配布元<input value={source} onChange={(event) => setSource(event.target.value)} /></label><label>バージョン<input value={version} onChange={(event) => setVersion(event.target.value)} /></label></>}
+          <label><span className="field-label">商品URL{isBoothUrl && <button type="button" className="secondary url-fetch-button" disabled={busy} onClick={() => void fetchBoothMetadata()}><Download aria-hidden="true" size={14} /> URLから取得</button>}</span><input value={productUrl} onChange={(event) => setProductUrl(event.target.value)} /></label>
         </div>
         <label>メモ<textarea value={note} onChange={(event) => setNote(event.target.value)} /></label>
-        <AssetLabels tags={tags} categories={categories} tagIds={tagIds} categoryIds={categoryIds} setTagIds={setTagIds} setCategoryIds={setCategoryIds} onAddTag={onAddTag} />
+        <AssetLabels tags={availableTags} categories={availableCategories} tagIds={tagIds} categoryIds={categoryIds} setTagIds={setTagIds} setCategoryIds={setCategoryIds} onAddTag={onAddTag} />
         <section className="file-select">
           <b>カバー画像</b>
           <button className="secondary compact" disabled={busy} onClick={() => void chooseCover()}>画像を選択</button>

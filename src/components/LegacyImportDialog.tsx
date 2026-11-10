@@ -4,6 +4,7 @@ import { invoke } from "../lib/api";
 import type { Category, Tag } from "../types";
 import { confirmDialog } from "../lib/confirm-dialog";
 import { AssetLabels } from "./AssetLabels";
+import { X } from "lucide-react";
 
 type Props = {
   tags: Tag[];
@@ -81,7 +82,10 @@ export function LegacyImportDialog({
         aria-modal="true"
         aria-labelledby="legacy-title"
       >
-        <h2 id="legacy-title">旧形式ZIPを一括取り込み</h2>
+        <div className="dialog-head">
+          <h2 id="legacy-title">旧形式ZIPを一括取り込み</h2>
+          <button className="icon-button" aria-label="旧形式ZIP取り込みを閉じる" disabled={busy} onClick={onClose}><X aria-hidden="true" size={20} /></button>
+        </div>
         <p className="hint">
           複数フォルダを指定できます。各フォルダ直下のZIPを対象にします。
         </p>

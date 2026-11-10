@@ -23,9 +23,7 @@ pub(super) fn migrate_schema(connection: &Connection) -> LibraryResult<()> {
           id TEXT PRIMARY KEY NOT NULL,
           title TEXT NOT NULL,
           creator TEXT,
-          source TEXT,
           product_url TEXT,
-          version TEXT,
           acquired_at INTEGER,
           note TEXT,
           cover_path TEXT,
@@ -116,6 +114,17 @@ pub(super) fn migrate_schema(connection: &Connection) -> LibraryResult<()> {
         )?;
         connection.execute_batch("ALTER TABLE assets DROP COLUMN description;")?;
     }
+    for column in ["source", "version"] {
+        let exists = connection
+            .prepare("PRAGMA table_info(assets)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|name| name == column);
+        if exists {
+            connection.execute_batch(&format!("ALTER TABLE assets DROP COLUMN {column};"))?;
+        }
+    }
 
     connection.execute_batch(
         "
@@ -129,7 +138,7 @@ pub(super) fn migrate_schema(connection: &Connection) -> LibraryResult<()> {
     )?;
 
     connection.execute(
-        "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('schema_version', '2')",
+        "INSERT OR REPLACE INTO app_metadata (key, value) VALUES ('schema_version', '3')",
         [],
     )?;
     Ok(())

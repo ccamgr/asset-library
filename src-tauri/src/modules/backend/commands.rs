@@ -3,6 +3,8 @@ mod access;
 #[macro_use]
 mod catalog;
 #[macro_use]
+mod booth;
+#[macro_use]
 mod classification;
 #[macro_use]
 mod files;
@@ -14,6 +16,7 @@ mod library;
 mod maintenance;
 
 pub(super) use access::*;
+pub(super) use booth::*;
 pub(super) use catalog::*;
 pub(super) use classification::*;
 pub(super) use files::*;
@@ -31,6 +34,9 @@ pub(super) fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         list_assets,
         get_asset_detail,
         update_asset,
+        get_booth_import_settings,
+        set_booth_import_settings,
+        fetch_booth_metadata,
         list_tags,
         create_tag,
         delete_tag,

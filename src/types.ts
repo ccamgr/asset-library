@@ -35,10 +35,10 @@ export type Detail = {
   id: string;
   title: string;
   creator: string | null;
-  source: string | null;
   productUrl: string | null;
-  version: string | null;
   note: string | null;
+  createdAt: number;
+  updatedAt: number;
   coverPath: string | null;
   tags: Tag[];
   categories: Category[];

@@ -4,6 +4,8 @@ import { ChevronDown, ChevronUp, ExternalLink, FileOutput, FolderOpen, Pencil, T
 import type { Detail } from "../types";
 import { bytes } from "../lib/utils";
 
+const timestamp = (value: number) => new Date(value * 1000).toLocaleString("ja-JP");
+
 type Props = {
   detail: Detail | null;
   busy: boolean;
@@ -42,8 +44,7 @@ export function AssetDetailPane({ detail, busy, onClose, onEdit, onDeleteAsset, 
         <h3>{detail.title}</h3>
         <p>{detail.creator ?? "作者未設定"}</p>
         {detail.productUrl && <button className="secondary compact" onClick={() => onUrl(detail.productUrl!)}><ExternalLink aria-hidden="true" size={18} /> 商品ページを開く</button>}
-        {detail.source && <p><b>配布元:</b> {detail.source}</p>}
-        {detail.version && <p><b>バージョン:</b> {detail.version}</p>}
+        <p className="muted detail-timestamps">作成: {timestamp(detail.createdAt)}　更新: {timestamp(detail.updatedAt)}</p>
       </section>
       <section className="detail-section"><b>カテゴリー</b><div className="chip-row">{detail.categories.map((category) => <span className="chip" key={category.id}>{category.name}</span>)}</div></section>
       <section className="detail-section"><b>タグ</b><div className="chip-row">{detail.tags.map((tag) => <span className="chip" key={tag.id}>{tag.name}</span>)}</div></section>

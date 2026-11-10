@@ -7,6 +7,10 @@ pub(super) struct AppSettings {
     pub(super) database_backup_path: Option<PathBuf>,
     pub(super) database_path: Option<PathBuf>,
     #[serde(default)]
+    pub(super) import_booth_categories: bool,
+    #[serde(default)]
+    pub(super) import_booth_tags: bool,
+    #[serde(default)]
     pub(super) window_state: Option<WindowState>,
 }
 
