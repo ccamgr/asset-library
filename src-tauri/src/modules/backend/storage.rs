@@ -76,13 +76,58 @@ pub(super) fn reveal_in_file_manager(path: &Path) -> LibraryResult<()> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 pub(super) fn open_with_default_application(target: &str) -> LibraryResult<()> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("explorer.exe");
-        command.arg(target);
-        command
+    use std::{ffi::OsStr, iter::once, os::windows::ffi::OsStrExt};
+    use windows::{
+        core::PCWSTR,
+        Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
     };
+
+    let target = OsStr::new(target)
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            None,
+            PCWSTR(target.as_ptr()),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as isize;
+    if code <= 32 {
+        return Err(LibraryError::Message(shell_execute_error_message(code)));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn shell_execute_error_message(code: isize) -> String {
+    let reason = match code {
+        0 => "Windowsのリソースが不足しています",
+        2 => "ファイルが見つかりません",
+        3 => "パスが見つかりません",
+        5 => "ファイルへのアクセスが拒否されました",
+        11 => "実行形式が無効です",
+        26 => "ファイルの関連付けが不完全です",
+        27 => "関連付けアプリとの通信がビジー状態です",
+        28 => "関連付けアプリとの通信に失敗しました",
+        29 => "関連付けアプリとの通信がタイムアウトしました",
+        30 => "関連付けアプリに必要なDLLが見つかりません",
+        31 => "この種類のファイルを開くアプリが関連付けられていません",
+        32 => "Windowsのメモリが不足しています",
+        33 => "ファイルが他のアプリで使用中です",
+        _ => return format!("Windows Shellで開けませんでした (エラーコード: {code})"),
+    };
+    format!("Windows Shellで開けませんでした: {reason} (エラーコード: {code})")
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn open_with_default_application(target: &str) -> LibraryResult<()> {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = Command::new("open");

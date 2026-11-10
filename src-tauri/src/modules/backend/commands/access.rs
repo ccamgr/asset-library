@@ -161,12 +161,26 @@ pub(crate) fn open_asset_file(
 }
 
 #[tauri::command]
-pub(crate) fn open_external_url(url: String) -> Result<(), String> {
+pub(crate) fn open_external_url(state: State<'_, AppState>, url: String) -> Result<(), String> {
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("HTTP(S) のURLだけを開けます".into());
     }
-    open_with_default_application(url).map_err(|error| error.to_string())
+    let log_path = state.log_path.clone();
+    state.log(format!("external URL open requested url={url:?}"));
+    match open_with_default_application(url) {
+        Ok(()) => {
+            append_log(&log_path, &format!("external URL open started url={url:?}"));
+            Ok(())
+        }
+        Err(error) => {
+            append_log(
+                &log_path,
+                &format!("external URL open failed url={url:?} reason={error}"),
+            );
+            Err(error.to_string())
+        }
+    }
 }
 
 #[tauri::command]
