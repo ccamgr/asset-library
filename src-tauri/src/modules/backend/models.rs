@@ -172,6 +172,7 @@ pub(super) struct BoothMetadata {
     pub(super) title: String,
     pub(super) creator: Option<String>,
     pub(super) note: Option<String>,
+    pub(super) cover_url: Option<String>,
     pub(super) category: Option<String>,
     pub(super) tags: Vec<String>,
 }

@@ -49,6 +49,69 @@ pub(crate) fn set_asset_cover(
 }
 
 #[tauri::command]
+pub(crate) fn set_asset_cover_from_url(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    asset_id: String,
+    image_url: String,
+) -> Result<(), String> {
+    if !image_url.starts_with("https://booth.pximg.net/") {
+        return Err("BOOTHのカバー画像URLが不正です".into());
+    }
+    state.log(format!(
+        "BOOTH cover download requested asset_id={asset_id}"
+    ));
+    const MAX_COVER_BYTES: u64 = 20 * 1024 * 1024;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("HTTPクライアントを初期化できません: {error}"))?;
+    let response = client
+        .get(&image_url)
+        .send()
+        .map_err(|error| format!("BOOTHのカバー画像を取得できません: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("BOOTHのカバー画像を取得できません: {error}"))?;
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_COVER_BYTES)
+    {
+        return Err("BOOTHのカバー画像が大きすぎます（上限20 MiB）".into());
+    }
+    let extension = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .and_then(|value| match value {
+            "image/jpeg" => Some("jpg"),
+            "image/png" => Some("png"),
+            "image/webp" => Some("webp"),
+            "image/gif" => Some("gif"),
+            _ => None,
+        })
+        .ok_or_else(|| "BOOTHのカバー画像形式に対応していません".to_string())?;
+    let mut bytes = Vec::new();
+    response
+        .take(MAX_COVER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("BOOTHのカバー画像を読み取れません: {error}"))?;
+    if bytes.len() as u64 > MAX_COVER_BYTES {
+        return Err("BOOTHのカバー画像が大きすぎます（上限20 MiB）".into());
+    }
+    let temporary_path = std::env::temp_dir().join(format!(
+        "asset-library-cover-{}.{}",
+        Uuid::now_v7(),
+        extension
+    ));
+    fs::write(&temporary_path, bytes).map_err(|error| error.to_string())?;
+    let result = set_asset_cover(app, state, asset_id, display_path(&temporary_path));
+    let _ = fs::remove_file(temporary_path);
+    result
+}
+
+#[tauri::command]
 pub(crate) fn get_asset_file_path(
     app: AppHandle,
     state: State<'_, AppState>,

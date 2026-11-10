@@ -121,7 +121,7 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
     case "set_booth_import_settings":
       return undefined as T;
     case "fetch_booth_metadata":
-      return { title: "BOOTHメタデータのサンプル", creator: "サンプルショップ", note: "BOOTHから取得した説明です。", category: null, tags: [] } as T;
+      return { title: "BOOTHメタデータのサンプル", creator: "サンプルショップ", note: "BOOTHから取得した説明です。", coverUrl: null, category: null, tags: [] } as T;
     case "get_capacity_report":
       return {
         assetBytes: assets.reduce(

@@ -8,6 +8,8 @@ struct BoothResponse {
     category: Option<BoothCategory>,
     #[serde(default)]
     tags: Vec<BoothTag>,
+    #[serde(default)]
+    images: Vec<BoothImage>,
 }
 
 #[derive(Deserialize)]
@@ -23,6 +25,11 @@ struct BoothCategory {
 #[derive(Deserialize)]
 struct BoothTag {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct BoothImage {
+    original: String,
 }
 
 #[tauri::command]
@@ -64,7 +71,14 @@ pub(crate) fn fetch_booth_metadata(
     state.log(format!(
         "BOOTH metadata fetch requested url={metadata_url:?}"
     ));
-    let response = reqwest::blocking::get(&metadata_url)
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("HTTPクライアントを初期化できません: {error}"))?;
+    let response = client
+        .get(&metadata_url)
+        .send()
         .map_err(|error| format!("BOOTHのメタデータを取得できません: {error}"))?
         .error_for_status()
         .map_err(|error| format!("BOOTHのメタデータを取得できません: {error}"))?
@@ -78,6 +92,11 @@ pub(crate) fn fetch_booth_metadata(
         title: response.name,
         creator: response.shop.map(|shop| shop.name),
         note: response.description,
+        cover_url: response
+            .images
+            .into_iter()
+            .next()
+            .map(|image| image.original),
         category: settings
             .import_booth_categories
             .then(|| response.category.map(|category| category.name))

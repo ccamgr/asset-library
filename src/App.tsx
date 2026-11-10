@@ -13,7 +13,7 @@ import { AssetSidebar } from "./components/AssetSidebar";
 import { AssetDetailPane } from "./components/AssetDetailPane";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ToastStack } from "./components/ToastStack";
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import type {
   Asset,
   Category,
@@ -338,6 +338,14 @@ function App() {
         const asset = assets[index];
         if (asset)
           return [
+            {
+              label: `「${asset.title}」を編集`,
+              icon: <Pencil aria-hidden="true" size={18} />,
+              run: async () => {
+                await select(asset.id);
+                setAssetEditDialogOpen(true);
+              },
+            },
             {
               label: `「${asset.title}」を削除`,
               icon: <Trash2 aria-hidden="true" size={18} />,

@@ -25,6 +25,7 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
   const [creator, setCreator] = useState(asset.creator ?? "");
   const [productUrl, setProductUrl] = useState(asset.productUrl ?? "");
   const [note, setNote] = useState(asset.note ?? "");
+  const [boothCoverUrl, setBoothCoverUrl] = useState<string | null>(null);
   const [tagIds, setTagIds] = useState(asset.tags.map((tag) => tag.id));
   const [categoryIds, setCategoryIds] = useState(asset.categories.map((category) => category.id));
   const [coverPath, setCoverPath] = useState<string | null>(null);
@@ -36,10 +37,11 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
   const fetchBoothMetadata = async () => {
     setBusy(true);
     try {
-      const metadata = await invoke<{ title: string; creator: string | null; note: string | null; category: string | null; tags: string[] }>("fetch_booth_metadata", { request: { productUrl } });
+      const metadata = await invoke<{ title: string; creator: string | null; note: string | null; coverUrl: string | null; category: string | null; tags: string[] }>("fetch_booth_metadata", { request: { productUrl } });
       setTitle(metadata.title);
       setCreator(metadata.creator ?? "");
       setNote(metadata.note ?? "");
+      setBoothCoverUrl(metadata.coverUrl);
       if (metadata.category) {
         let category = availableCategories.find((item) => item.name.localeCompare(metadata.category!, undefined, { sensitivity: "accent" }) === 0);
         if (!category) {
@@ -77,6 +79,14 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
       });
       await invoke("set_asset_tags", { request: { assetId: asset.id, ids: tagIds } });
       await invoke("set_asset_categories", { request: { assetId: asset.id, ids: categoryIds } });
+      let coverError: unknown = null;
+      if (boothCoverUrl) {
+        try {
+          await invoke("set_asset_cover_from_url", { assetId: asset.id, imageUrl: boothCoverUrl });
+        } catch (reason) {
+          coverError = reason;
+        }
+      }
       if (coverPath) {
         await invoke("set_asset_cover", { assetId: asset.id, sourcePath: coverPath });
       }
@@ -87,6 +97,7 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
         await invoke("add_asset_files", { request: { assetId: asset.id, sourcePaths: filesToAdd } });
       }
       await onDone(`${title.trim()} を保存しました`);
+      if (coverError) onError(`カバー画像を取得できませんでした: ${String(coverError)}`);
     } catch (reason) {
       onError(String(reason));
     } finally {

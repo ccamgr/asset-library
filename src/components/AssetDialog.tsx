@@ -23,6 +23,7 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
   const [creator, setCreator] = useState("");
   const [productUrl, setProductUrl] = useState("");
   const [note, setNote] = useState("");
+  const [boothCoverUrl, setBoothCoverUrl] = useState<string | null>(null);
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -33,10 +34,11 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
   const fetchBoothMetadata = async () => {
     setBusy(true);
     try {
-      const metadata = await invoke<{ title: string; creator: string | null; note: string | null; category: string | null; tags: string[] }>("fetch_booth_metadata", { request: { productUrl } });
+      const metadata = await invoke<{ title: string; creator: string | null; note: string | null; coverUrl: string | null; category: string | null; tags: string[] }>("fetch_booth_metadata", { request: { productUrl } });
       setTitle(metadata.title);
       setCreator(metadata.creator ?? "");
       setNote(metadata.note ?? "");
+      setBoothCoverUrl(metadata.coverUrl);
       if (metadata.category) {
         let category = availableCategories.find((item) => item.name.localeCompare(metadata.category!, undefined, { sensitivity: "accent" }) === 0);
         if (!category) {
@@ -134,7 +136,16 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
           },
         },
       );
+      let coverError: unknown = null;
+      if (boothCoverUrl) {
+        try {
+          await invoke("set_asset_cover_from_url", { assetId: result.assetId, imageUrl: boothCoverUrl });
+        } catch (reason) {
+          coverError = reason;
+        }
+      }
       await onDone(result.assetId, result.title + " を登録しました");
+      if (coverError) onError(`カバー画像を取得できませんでした: ${String(coverError)}`);
     } catch (reason) {
       onError(String(reason));
     } finally {
