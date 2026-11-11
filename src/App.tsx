@@ -67,6 +67,11 @@ function App() {
   const thumbnailRefreshTimer = useRef<number | null>(null);
 
   const reportFailure = (reason: unknown) => setError(String(reason));
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(null), 4_500);
+    return () => window.clearTimeout(timer);
+  }, [message]);
   const updateLibraryViewSize = (size: LibraryViewSize) => {
     setLibraryViewSize(size);
     localStorage.setItem(LIBRARY_VIEW_SIZE_KEY, size);
@@ -414,7 +419,7 @@ function App() {
           legacyImportNotice={null}
           onDismissMessage={() => setMessage(null)}
           onDismissError={() => setError(null)}
-          onDismissLegacyNotice={() => undefined}
+        onDismissLegacyNotice={() => undefined}
         />
       </>
     );
@@ -508,7 +513,6 @@ function App() {
         onDismissMessage={() => setMessage(null)}
         onDismissError={() => setError(null)}
         onDismissLegacyNotice={() => setLegacyImportNotice(null)}
-        modalOpen={assetDialogOpen || assetEditDialogOpen || legacyImportOpen || settingsOpen}
       />
       {assetDialogOpen && (
         <AssetDialog

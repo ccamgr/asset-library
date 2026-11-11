@@ -109,32 +109,42 @@ pub(crate) fn fetch_booth_metadata(
     })
 }
 
-fn booth_metadata_url(product_url: &str) -> Result<String, String> {
+pub(crate) fn booth_metadata_url(product_url: &str) -> Result<String, String> {
     let input = product_url.trim();
-    let without_scheme = input
+    let (scheme, without_scheme) = input
         .strip_prefix("https://")
-        .or_else(|| input.strip_prefix("http://"))
+        .map(|path| ("https://", path))
+        .or_else(|| input.strip_prefix("http://").map(|path| ("http://", path)))
         .ok_or_else(|| "BOOTHの商品URLを入力してください".to_string())?;
     let mut segments = without_scheme.split('/');
-    let host = segments.next().unwrap_or_default().to_ascii_lowercase();
-    if host != "booth.pm" && !host.ends_with(".booth.pm") {
+    let host = segments.next().unwrap_or_default();
+    let normalized_host = host.to_ascii_lowercase();
+    if normalized_host != "booth.pm" && !normalized_host.ends_with(".booth.pm") {
         return Err("BOOTHの商品URLを入力してください".into());
     }
-    let first_path = segments.next();
-    let item_segment = if first_path == Some("items") {
-        first_path
+    let first_path = segments.next().unwrap_or_default();
+    let (path_prefix, item_segment) = if first_path == "items" {
+        ("", first_path)
     } else {
-        segments.next()
+        (first_path, segments.next().unwrap_or_default())
     };
-    if item_segment != Some("items") {
+    if item_segment != "items" {
         return Err("BOOTHの商品URLを入力してください".into());
     }
     let item_id = segments
+        .next()
+        .unwrap_or_default()
+        .split(['?', '#'])
         .next()
         .unwrap_or_default()
         .trim_end_matches(".json");
     if item_id.is_empty() || !item_id.chars().all(|character| character.is_ascii_digit()) {
         return Err("BOOTHの商品URLを入力してください".into());
     }
-    Ok(format!("https://{host}/items/{item_id}.json"))
+    let path_prefix = if path_prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{path_prefix}/")
+    };
+    Ok(format!("{scheme}{host}/{path_prefix}items/{item_id}.json"))
 }

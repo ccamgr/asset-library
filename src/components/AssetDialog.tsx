@@ -4,6 +4,7 @@ import { open } from "../lib/dialog";
 import { invoke } from "../lib/api";
 import type { Category, Tag } from "../types";
 import { AssetLabels } from "./AssetLabels";
+import { CoverPreview } from "./CoverPreview";
 import { Download, X } from "lucide-react";
 import { nameOf, titleOf } from "../lib/utils";
 
@@ -196,6 +197,13 @@ export function AssetDialog({ tags, categories, onClose, onDone, onError }: Prop
           メモ
           <textarea value={note} onChange={(e) => setNote(e.target.value)} />
         </label>
+        <section className="file-select">
+          <b>カバー画像</b>
+          <CoverPreview
+            remoteUrl={boothCoverUrl}
+            status={boothCoverUrl ? "BOOTHから取得予定" : "URLから取得するとプレビューを表示します"}
+          />
+        </section>
         <section className="file-select">
           <b>登録ファイル</b>
           <div

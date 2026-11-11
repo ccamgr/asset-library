@@ -9,7 +9,6 @@ type Props = {
   onDismissMessage(): void;
   onDismissError(): void;
   onDismissLegacyNotice(): void;
-  modalOpen?: boolean;
 };
 
 export function ToastStack({
@@ -20,15 +19,13 @@ export function ToastStack({
   onDismissMessage,
   onDismissError,
   onDismissLegacyNotice,
-  modalOpen = false,
 }: Props) {
   if (!message && !error && !legacyProgress && !legacyImportNotice) return null;
-  const dismissible = !modalOpen && !document.querySelector(".text-dialog-backdrop");
   return <div className="toast-stack" aria-live="polite">
-    {message && <Toast title="完了" value={message} onDismiss={dismissible ? onDismissMessage : undefined} />}
-    {error && <Toast title="エラー" value={error} error onDismiss={dismissible ? onDismissError : undefined} />}
+    {message && <Toast title="完了" value={message} onDismiss={onDismissMessage} />}
+    {error && <Toast title="エラー" value={error} error onDismiss={onDismissError} />}
     {(legacyProgress || legacyImportNotice) && <div className="legacy-progress-toast" role="status">
-      {legacyProgress ? <><b>旧形式ZIPを取り込み中</b><span>{legacyProgress.completed} / {legacyProgress.total} 件</span><progress value={legacyProgress.completed} max={legacyProgress.total} /></> : <ToastBody title="旧形式ZIPの取り込み完了" value={legacyImportNotice ?? ""} onDismiss={dismissible ? onDismissLegacyNotice : undefined} />}
+      {legacyProgress ? <><b>旧形式ZIPを取り込み中</b><span>{legacyProgress.completed} / {legacyProgress.total} 件</span><progress value={legacyProgress.completed} max={legacyProgress.total} /></> : <ToastBody title="旧形式ZIPの取り込み完了" value={legacyImportNotice ?? ""} onDismiss={onDismissLegacyNotice} />}
     </div>}
   </div>;
 }

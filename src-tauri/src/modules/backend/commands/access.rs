@@ -1,3 +1,36 @@
+fn previewable_image_path(source_path: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(source_path);
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|value| ["png", "jpg", "jpeg", "webp", "gif"].contains(&value.as_str()))
+        .ok_or_else(|| "PNG、JPEG、WebP、GIF画像を選んでください".to_string())?;
+    path.canonicalize()
+        .map_err(|error| format!("画像ファイルを確認できません: {error}"))
+}
+
+#[tauri::command]
+pub(crate) fn allow_cover_preview_file(
+    app: AppHandle,
+    source_path: String,
+) -> Result<String, String> {
+    let path = previewable_image_path(&source_path)?;
+    if !path.is_file() {
+        return Err("画像ファイルを選んでください".into());
+    }
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|error| format!("画像プレビューを許可できません: {error}"))?;
+    Ok(display_path(&path))
+}
+
+#[tauri::command]
+pub(crate) fn revoke_cover_preview_file(app: AppHandle, source_path: String) -> Result<(), String> {
+    app.asset_protocol_scope()
+        .forbid_file(PathBuf::from(source_path))
+        .map_err(|error| format!("画像プレビューの許可を解除できません: {error}"))
+}
+
 #[tauri::command]
 pub(crate) fn set_asset_cover(
     app: AppHandle,

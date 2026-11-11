@@ -122,6 +122,10 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
       return undefined as T;
     case "fetch_booth_metadata":
       return { title: "BOOTHメタデータのサンプル", creator: "サンプルショップ", note: "BOOTHから取得した説明です。", coverUrl: null, category: null, tags: [] } as T;
+    case "allow_cover_preview_file":
+      return String(args?.sourcePath ?? "") as T;
+    case "revoke_cover_preview_file":
+      return undefined as T;
     case "get_capacity_report":
       return {
         assetBytes: assets.reduce(

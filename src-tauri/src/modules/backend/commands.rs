@@ -50,6 +50,8 @@ pub(super) fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         remove_asset_relation,
         set_asset_cover,
         set_asset_cover_from_url,
+        allow_cover_preview_file,
+        revoke_cover_preview_file,
         delete_asset,
         add_asset_files,
         delete_asset_file,

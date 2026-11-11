@@ -60,6 +60,18 @@ fn refuses_an_invalid_asset_id_for_storage_paths() {
 }
 
 #[test]
+fn preserves_the_booth_product_url_path_when_requesting_metadata() {
+    assert_eq!(
+        commands::booth_metadata_url("https://booth.pm/ja/items/7388736").unwrap(),
+        "https://booth.pm/ja/items/7388736.json"
+    );
+    assert_eq!(
+        commands::booth_metadata_url("https://komado.booth.pm/items/8962830").unwrap(),
+        "https://komado.booth.pm/items/8962830.json"
+    );
+}
+
+#[test]
 fn shards_asset_directories_by_random_uuid_suffix() {
     let root = Path::new("/tmp/assets");
     let asset_id = "01900000-0000-7000-8000-0000000000af";

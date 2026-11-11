@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, Plus, Trash2, X } from "lucide-react";
 import { open } from "../lib/dialog";
 import { invoke } from "../lib/api";
 import type { Category, Detail, Tag } from "../types";
 import { AssetLabels } from "./AssetLabels";
+import { CoverPreview } from "./CoverPreview";
 import { nameOf } from "../lib/utils";
 
 type Props = {
@@ -33,6 +34,13 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
   const [fileIdsToDelete, setFileIdsToDelete] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const isBoothUrl = /^(https?:\/\/)?(?:[\w-]+\.)?booth\.pm\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?items\/\d+(?:\.json)?(?:[/?#].*)?$/i.test(productUrl.trim());
+
+  useEffect(() => {
+    if (!coverPath) return;
+    return () => {
+      void invoke("revoke_cover_preview_file", { sourcePath: coverPath }).catch(() => undefined);
+    };
+  }, [coverPath]);
 
   const fetchBoothMetadata = async () => {
     setBusy(true);
@@ -111,7 +119,10 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
         multiple: false,
         filters: [{ name: "画像", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
       });
-      if (typeof result === "string") setCoverPath(result);
+      if (typeof result === "string") {
+        const allowedPath = await invoke<string>("allow_cover_preview_file", { sourcePath: result });
+        setCoverPath(allowedPath);
+      }
     } catch (reason) {
       onError(String(reason));
     }
@@ -147,6 +158,12 @@ export function AssetEditDialog({ asset, tags, categories, onClose, onDone, onEr
           <b>カバー画像</b>
           <button className="secondary compact" disabled={busy} onClick={() => void chooseCover()}>画像を選択</button>
           <p>{coverPath ? nameOf(coverPath) : "変更しない"}</p>
+          <CoverPreview
+            localPath={coverPath}
+            remoteUrl={boothCoverUrl}
+            fallbackPath={asset.coverPath}
+            status={coverPath ? `手動選択: ${nameOf(coverPath)}` : boothCoverUrl ? "BOOTHから取得予定" : asset.coverPath ? "現在のカバー画像" : "カバー画像はありません"}
+          />
         </section>
         <section className="file-select">
           <div className="side-title"><b>ファイル</b><button className="secondary compact" disabled={busy} onClick={() => void chooseFiles()}><Plus aria-hidden="true" size={18} /> ファイルを追加</button></div>
