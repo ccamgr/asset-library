@@ -37,6 +37,7 @@ pub(super) fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         get_booth_import_settings,
         set_booth_import_settings,
         fetch_booth_metadata,
+        start_booth_metadata_refresh,
         list_tags,
         create_tag,
         delete_tag,

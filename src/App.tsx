@@ -21,6 +21,8 @@ import type {
   LibraryViewSize,
   LegacyImportProgress,
   LegacyImportComplete,
+  BoothMetadataRefreshProgress,
+  BoothMetadataRefreshComplete,
   Status,
   Tag,
 } from "./types";
@@ -54,6 +56,10 @@ function App() {
   const [legacyImportNotice, setLegacyImportNotice] = useState<string | null>(
     null,
   );
+  const [boothMetadataRefreshProgress, setBoothMetadataRefreshProgress] =
+    useState<BoothMetadataRefreshProgress | null>(null);
+  const [boothMetadataRefreshNotice, setBoothMetadataRefreshNotice] =
+    useState<string | null>(null);
   const [assetDialogOpen, setAssetDialogOpen] = useState(false);
   const [assetEditDialogOpen, setAssetEditDialogOpen] = useState(false);
   const [legacyImportOpen, setLegacyImportOpen] = useState(false);
@@ -96,6 +102,48 @@ function App() {
       setAssets((current) => append ? [...current, ...nextAssets] : nextAssets);
       setHasMoreAssets(nextAssets.length === ASSET_PAGE_SIZE);
     }
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<BoothMetadataRefreshComplete>("booth-metadata-refresh-complete", (event) => {
+      setBoothMetadataRefreshProgress(null);
+      const { result, error: refreshError } = event.payload;
+      if (refreshError) {
+        setError(refreshError);
+        return;
+      }
+      if (!result) return;
+      const visibleFailures = result.failures.slice(0, 3);
+      const failures = visibleFailures.length
+        ? `（失敗: ${visibleFailures.map((item) => `${item.title}: ${item.reason}`).join(" / ")}${result.failures.length > visibleFailures.length ? ` / ほか${result.failures.length - visibleFailures.length}件` : ""}）`
+        : "";
+      setBoothMetadataRefreshNotice(
+        `${result.updated}件のBOOTHメタデータを再取得しました${failures}`,
+      );
+      void refresh().catch(reportFailure);
+    }).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<BoothMetadataRefreshProgress>("booth-metadata-refresh-started", (event) => {
+      setBoothMetadataRefreshNotice(null);
+      setBoothMetadataRefreshProgress(event.payload);
+    }).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<BoothMetadataRefreshProgress>("booth-metadata-refresh-progress", (event) =>
+      setBoothMetadataRefreshProgress(event.payload),
+    ).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
   }, []);
 
   const refresh = async () => {
@@ -417,9 +465,12 @@ function App() {
           error={error}
           legacyProgress={null}
           legacyImportNotice={null}
+          boothMetadataRefreshProgress={null}
+          boothMetadataRefreshNotice={null}
           onDismissMessage={() => setMessage(null)}
           onDismissError={() => setError(null)}
-        onDismissLegacyNotice={() => undefined}
+          onDismissLegacyNotice={() => undefined}
+          onDismissBoothMetadataRefreshNotice={() => undefined}
         />
       </>
     );
@@ -510,9 +561,12 @@ function App() {
         error={error}
         legacyProgress={legacyProgress}
         legacyImportNotice={legacyImportNotice}
+        boothMetadataRefreshProgress={boothMetadataRefreshProgress}
+        boothMetadataRefreshNotice={boothMetadataRefreshNotice}
         onDismissMessage={() => setMessage(null)}
         onDismissError={() => setError(null)}
         onDismissLegacyNotice={() => setLegacyImportNotice(null)}
+        onDismissBoothMetadataRefreshNotice={() => setBoothMetadataRefreshNotice(null)}
       />
       {assetDialogOpen && (
         <AssetDialog

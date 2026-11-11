@@ -281,6 +281,24 @@ async function mockInvoke<T>(command: string, args?: AnyRecord): Promise<T> {
       );
       return undefined as T;
     }
+    case "start_booth_metadata_refresh": {
+      const total = assets.filter((asset) => /booth\.pm\//i.test(asset.productUrl ?? "")).length;
+      emitMock("booth-metadata-refresh-started", { completed: 0, total });
+      for (let completed = 1; completed <= total; completed += 1) {
+        window.setTimeout(
+          () => emitMock("booth-metadata-refresh-progress", { completed, total }),
+          completed * 250,
+        );
+      }
+      window.setTimeout(
+        () => emitMock("booth-metadata-refresh-complete", {
+          result: { updated: total, failures: [] },
+          error: null,
+        }),
+        (total + 1) * 250,
+      );
+      return total as T;
+    }
     case "create_database_backup":
       return { path: "ブラウザプレビュー/mock-backup.db" } as T;
     default:

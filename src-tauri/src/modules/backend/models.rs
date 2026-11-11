@@ -177,7 +177,7 @@ pub(super) struct BoothMetadata {
     pub(super) tags: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BoothImportSettings {
     pub(super) import_categories: bool,
@@ -189,6 +189,34 @@ pub(super) struct BoothImportSettings {
 pub(super) struct BoothImportSettingsRequest {
     pub(super) import_categories: bool,
     pub(super) import_tags: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothMetadataRefreshProgress {
+    pub(super) completed: usize,
+    pub(super) total: usize,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothMetadataRefreshFailure {
+    pub(super) title: String,
+    pub(super) reason: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothMetadataRefreshResult {
+    pub(super) updated: usize,
+    pub(super) failures: Vec<BoothMetadataRefreshFailure>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BoothMetadataRefreshComplete {
+    pub(super) result: Option<BoothMetadataRefreshResult>,
+    pub(super) error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

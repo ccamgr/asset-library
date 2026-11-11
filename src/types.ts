@@ -60,3 +60,12 @@ export type LegacyImportComplete = {
   result: LegacyImportResult | null;
   error: string | null;
 };
+export type BoothMetadataRefreshProgress = { completed: number; total: number };
+export type BoothMetadataRefreshResult = {
+  updated: number;
+  failures: { title: string; reason: string }[];
+};
+export type BoothMetadataRefreshComplete = {
+  result: BoothMetadataRefreshResult | null;
+  error: string | null;
+};

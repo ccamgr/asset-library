@@ -98,6 +98,23 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
     } catch (error) { onError(String(error)); }
   };
 
+  const refreshBoothMetadata = async () => {
+    const confirmed = await confirmDialog(
+      "BOOTHメタデータを再取得",
+      "BOOTH URLが設定された全アセットの名前・作者・メモを更新します。カテゴリとタグは上の設定に従って反映されます。続けますか？",
+      "再取得を開始",
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await invoke<number>("start_booth_metadata_refresh");
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="settings-screen" role="dialog" aria-modal="true" aria-label="設定">
       <section className="settings-panel">
@@ -149,6 +166,9 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
             <input type="checkbox" checked={boothImportTags} onChange={(event) => void updateBoothImportSettings(boothImportCategories, event.target.checked)} />
             BOOTHのタグを反映する
           </label>
+          <button className="secondary" disabled={busy} onClick={() => void refreshBoothMetadata()}>
+            全アセットのBOOTH URLからメタデータを再取得
+          </button>
         </section>
         <section className="settings-section">
           <h2>表示項目</h2>
