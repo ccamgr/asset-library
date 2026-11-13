@@ -62,6 +62,7 @@ pub(super) fn handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         open_asset_file,
         open_external_url,
         get_capacity_report,
+        check_asset_storage_integrity,
         rebuild_thumbnail_cache,
         create_database_backup,
         list_database_backups,

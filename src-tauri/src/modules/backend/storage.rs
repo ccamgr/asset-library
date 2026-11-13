@@ -34,7 +34,7 @@ pub(super) fn database_size(path: &Path) -> u64 {
 pub(super) fn storage_capacity_report(locations: &StorageLocations) -> CapacityReport {
     CapacityReport {
         library_bytes: directory_size(&locations.library_root),
-        asset_bytes: directory_size(&locations.asset_storage_root.join("assets")),
+        asset_bytes: directory_size(&locations.asset_storage_root),
         database_bytes: database_size(&locations.database_path),
         thumbnail_cache_bytes: directory_size(&locations.library_root.join("thumbnail-cache")),
         database_backup_bytes: directory_size(&locations.database_backup_root),
@@ -193,19 +193,12 @@ pub(super) fn asset_directory(asset_storage_root: &Path, asset_id: &str) -> Libr
     Ok(asset_storage_root.join(asset_relative_directory(asset_id)?))
 }
 
-pub(super) fn asset_files_directory(
-    asset_storage_root: &Path,
-    asset_id: &str,
-) -> LibraryResult<PathBuf> {
-    Ok(asset_directory(asset_storage_root, asset_id)?.join("files"))
-}
-
 pub(super) fn asset_relative_directory(asset_id: &str) -> LibraryResult<String> {
     let asset_id = validated_asset_id(asset_id)?;
     let shard = asset_id
         .get(asset_id.len().saturating_sub(2)..)
         .ok_or_else(|| LibraryError::Message("アセットIDが不正です".into()))?;
-    Ok(format!("assets/{shard}/{asset_id}"))
+    Ok(format!("{shard}/{asset_id}"))
 }
 
 pub(super) fn asset_relative_path(asset_id: &str, filename: &str) -> LibraryResult<String> {
@@ -214,6 +207,58 @@ pub(super) fn asset_relative_path(asset_id: &str, filename: &str) -> LibraryResu
         asset_relative_directory(asset_id)?,
         filename
     ))
+}
+
+pub(super) fn existing_asset_directory(
+    asset_storage_root: &Path,
+    asset_id: &str,
+) -> LibraryResult<Option<PathBuf>> {
+    let current = asset_directory(asset_storage_root, asset_id)?;
+    if current.is_dir() {
+        return Ok(Some(current));
+    }
+
+    let legacy = asset_storage_root
+        .join("assets")
+        .join(asset_relative_directory(asset_id)?);
+    Ok(legacy.is_dir().then_some(legacy))
+}
+
+pub(super) fn asset_relative_path_in_directory(
+    asset_storage_root: &Path,
+    asset_directory: &Path,
+    filename: &str,
+) -> LibraryResult<String> {
+    let path = asset_directory.join(filename);
+    let relative = path
+        .strip_prefix(asset_storage_root)
+        .map_err(|_| LibraryError::Message("アセット保存先が不正です".into()))?;
+    Ok(relative.to_string_lossy().replace('\\', "/"))
+}
+
+pub(super) fn asset_storage_integrity_report(
+    database_path: &Path,
+    asset_storage_root: &Path,
+) -> LibraryResult<AssetStorageIntegrityReport> {
+    let connection = Connection::open(database_path)?;
+    let asset_ids = connection
+        .prepare("SELECT id FROM assets ORDER BY id")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let missing_asset_ids = asset_ids
+        .iter()
+        .filter_map(
+            |asset_id| match existing_asset_directory(asset_storage_root, asset_id) {
+                Ok(Some(_)) => None,
+                Ok(None) | Err(_) => Some(asset_id.clone()),
+            },
+        )
+        .collect();
+
+    Ok(AssetStorageIntegrityReport {
+        total: asset_ids.len(),
+        missing_asset_ids,
+    })
 }
 
 pub(super) fn cleanup_added_files(destination: &Path, files: &[ImportedFile]) {
@@ -231,7 +276,7 @@ pub(super) fn prepare_library(
     for directory in ["thumbnail-cache", "exports"] {
         fs::create_dir_all(root.join(directory))?;
     }
-    fs::create_dir_all(asset_storage_root.join("assets"))?;
+    fs::create_dir_all(asset_storage_root)?;
     fs::create_dir_all(database_backup_root)?;
     let database_parent = database_path
         .parent()

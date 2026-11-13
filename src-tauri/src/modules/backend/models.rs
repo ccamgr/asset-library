@@ -116,6 +116,13 @@ pub(super) struct AssetSummary {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct AssetStorageIntegrityReport {
+    pub(super) total: usize,
+    pub(super) missing_asset_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct AssetFileView {
     pub(super) id: String,
     pub(super) original_filename: String,

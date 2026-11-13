@@ -77,7 +77,7 @@ fn shards_asset_directories_by_random_uuid_suffix() {
     let asset_id = "01900000-0000-7000-8000-0000000000af";
     assert_eq!(
         asset_directory(root, asset_id).unwrap(),
-        root.join("assets").join("af").join(asset_id)
+        root.join("af").join(asset_id)
     );
 }
 
@@ -86,12 +86,96 @@ fn stores_asset_paths_in_the_same_shard_as_the_asset_directory() {
     let asset_id = "01900000-0000-7000-8000-0000000000af";
     assert_eq!(
         asset_relative_path(asset_id, "files/example.zip").unwrap(),
-        format!("assets/af/{asset_id}/files/example.zip")
+        format!("af/{asset_id}/files/example.zip")
     );
     assert_eq!(
         asset_relative_path(asset_id, "cover.png").unwrap(),
-        format!("assets/af/{asset_id}/cover.png")
+        format!("af/{asset_id}/cover.png")
     );
+}
+
+#[test]
+fn storage_integrity_accepts_legacy_directories_and_reports_missing_ones() {
+    let root = std::env::temp_dir().join(format!("vr-asset-library-integrity-{}", Uuid::now_v7()));
+    let database = root.join(DATABASE_FILE);
+    let asset_storage = root.join("asset-storage");
+    prepare_library(&root, &database, &asset_storage, &root.join("backups")).unwrap();
+
+    let current_id = Uuid::now_v7().to_string();
+    let legacy_id = Uuid::now_v7().to_string();
+    let missing_id = Uuid::now_v7().to_string();
+    let connection = Connection::open(&database).unwrap();
+    for asset_id in [&current_id, &legacy_id, &missing_id] {
+        connection
+            .execute(
+                "INSERT INTO assets (id, title, created_at, updated_at) VALUES (?1, ?2, 0, 0)",
+                params![asset_id, asset_id],
+            )
+            .unwrap();
+    }
+    let current = asset_directory(&asset_storage, &current_id).unwrap();
+    let legacy = asset_storage
+        .join("assets")
+        .join(asset_relative_directory(&legacy_id).unwrap());
+    fs::create_dir_all(&current).unwrap();
+    fs::create_dir_all(&legacy).unwrap();
+
+    assert_eq!(
+        existing_asset_directory(&asset_storage, &current_id).unwrap(),
+        Some(current)
+    );
+    assert_eq!(
+        existing_asset_directory(&asset_storage, &legacy_id).unwrap(),
+        Some(legacy.clone())
+    );
+    assert_eq!(
+        asset_relative_path_in_directory(&asset_storage, &legacy, "files/example.zip").unwrap(),
+        format!(
+            "assets/{}/files/example.zip",
+            asset_relative_directory(&legacy_id).unwrap()
+        )
+    );
+    let report = asset_storage_integrity_report(&database, &asset_storage).unwrap();
+    assert_eq!(report.total, 3);
+    assert_eq!(report.missing_asset_ids, vec![missing_id]);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn removes_assets_from_current_and_legacy_directories() {
+    let root = std::env::temp_dir().join(format!("vr-asset-library-remove-{}", Uuid::now_v7()));
+    let database = root.join(DATABASE_FILE);
+    let asset_storage = root.join("asset-storage");
+    prepare_library(&root, &database, &asset_storage, &root.join("backups")).unwrap();
+
+    let current_id = Uuid::now_v7().to_string();
+    let legacy_id = Uuid::now_v7().to_string();
+    let connection = Connection::open(&database).unwrap();
+    for asset_id in [&current_id, &legacy_id] {
+        connection
+            .execute(
+                "INSERT INTO assets (id, title, created_at, updated_at) VALUES (?1, ?2, 0, 0)",
+                params![asset_id, asset_id],
+            )
+            .unwrap();
+    }
+    let current = asset_directory(&asset_storage, &current_id).unwrap();
+    let legacy = asset_storage
+        .join("assets")
+        .join(asset_relative_directory(&legacy_id).unwrap());
+    fs::create_dir_all(&current).unwrap();
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(current.join("current.txt"), b"current").unwrap();
+    fs::write(legacy.join("legacy.txt"), b"legacy").unwrap();
+
+    remove_imported_asset(&database, &asset_storage, &current_id).unwrap();
+    remove_imported_asset(&database, &asset_storage, &legacy_id).unwrap();
+    assert!(!current.exists());
+    assert!(!legacy.exists());
+    assert_eq!(count_assets(&database).unwrap(), 0);
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

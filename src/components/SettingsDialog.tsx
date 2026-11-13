@@ -10,13 +10,15 @@ type Props = {
   onOpenLegacyImport(): void;
   onError(reason: string): void;
   onMessage(message: string): void;
+  onReconfigureLibrary(): void;
   libraryViewSize: LibraryViewSize;
   onLibraryViewSizeChange(size: LibraryViewSize): void;
 };
 
 type ThumbnailCacheRebuildResult = { generated: number; skipped: number };
+type AssetStorageIntegrityReport = { total: number; missingAssetIds: string[] };
 
-export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage, libraryViewSize, onLibraryViewSizeChange }: Props) {
+export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage, onReconfigureLibrary, libraryViewSize, onLibraryViewSizeChange }: Props) {
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [selected, setSelected] = useState("");
@@ -90,6 +92,24 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
     }
   };
 
+  const checkAssetStorageIntegrity = async () => {
+    setBusy(true);
+    try {
+      const result = await invoke<AssetStorageIntegrityReport>("check_asset_storage_integrity");
+      if (!result.missingAssetIds.length) {
+        onMessage(`${result.total}件のアセット保存先を確認しました`);
+        return;
+      }
+      const visible = result.missingAssetIds.slice(0, 5).join(", ");
+      const remaining = result.missingAssetIds.length - 5;
+      onError(`${result.missingAssetIds.length}件のアセット保存フォルダが見つかりません: ${visible}${remaining > 0 ? `、ほか${remaining}件` : ""}`);
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const updateBoothImportSettings = async (categories: boolean, tags: boolean) => {
     try {
       await invoke("set_booth_import_settings", { request: { importCategories: categories, importTags: tags } });
@@ -125,12 +145,41 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
           </button>
         </header>
         <section className="settings-section">
+          <h2>表示項目</h2>
+          <fieldset className="library-view-size">
+            <legend>ライブラリ一覧の大きさ</legend>
+            {(["large", "medium", "small"] as const).map((size) => (
+              <label className="check" key={size}>
+                <input type="radio" name="library-view-size" checked={libraryViewSize === size} onChange={() => onLibraryViewSizeChange(size)} />
+                {{ large: "大", medium: "中", small: "小" }[size]}
+              </label>
+            ))}
+          </fieldset>
+        </section>
+        <section className="settings-section">
+          <h2>BOOTHメタデータ取得</h2>
+          <label className="check">
+            <input type="checkbox" checked={boothImportCategories} onChange={(event) => void updateBoothImportSettings(event.target.checked, boothImportTags)} />
+            BOOTHのカテゴリを反映する
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={boothImportTags} onChange={(event) => void updateBoothImportSettings(boothImportCategories, event.target.checked)} />
+            BOOTHのタグを反映する
+          </label>
+          <button className="secondary" disabled={busy} onClick={() => void refreshBoothMetadata()}>
+            全アセットのBOOTH URLからメタデータを再取得
+          </button>
+        </section>
+        <section className="settings-section">
           <h2>ストレージ</h2>
           <p>アセット: {capacity ? bytes(capacity.assetBytes) : "読み込み中…"}</p>
           <p>ライブDB: {capacity ? bytes(capacity.databaseBytes) : "読み込み中…"}</p>
           <p>DBバックアップ: {capacity ? bytes(capacity.databaseBackupBytes) : "読み込み中…"}</p>
           <button className="secondary" disabled={busy} onClick={() => void rebuildThumbnailCache()}>
             サムネイルキャッシュを再生成
+          </button>
+          <button className="secondary" disabled={busy} onClick={() => void checkAssetStorageIntegrity()}>
+            アセット保存先との整合性を確認
           </button>
         </section>
         <section className="settings-section">
@@ -157,30 +206,10 @@ export function SettingsDialog({ onClose, onOpenLegacyImport, onError, onMessage
           </button>
         </section>
         <section className="settings-section">
-          <h2>BOOTHメタデータ取得</h2>
-          <label className="check">
-            <input type="checkbox" checked={boothImportCategories} onChange={(event) => void updateBoothImportSettings(event.target.checked, boothImportTags)} />
-            BOOTHのカテゴリを反映する
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={boothImportTags} onChange={(event) => void updateBoothImportSettings(boothImportCategories, event.target.checked)} />
-            BOOTHのタグを反映する
-          </label>
-          <button className="secondary" disabled={busy} onClick={() => void refreshBoothMetadata()}>
-            全アセットのBOOTH URLからメタデータを再取得
+          <h2>ライブラリ</h2>
+          <button className="secondary" disabled={busy} onClick={() => { onClose(); onReconfigureLibrary(); }}>
+            ライブラリ保存先を再設定
           </button>
-        </section>
-        <section className="settings-section">
-          <h2>表示項目</h2>
-          <fieldset className="library-view-size">
-            <legend>ライブラリ一覧の大きさ</legend>
-            {(["large", "medium", "small"] as const).map((size) => (
-              <label className="check" key={size}>
-                <input type="radio" name="library-view-size" checked={libraryViewSize === size} onChange={() => onLibraryViewSizeChange(size)} />
-                {{ large: "大", medium: "中", small: "小" }[size]}
-              </label>
-            ))}
-          </fieldset>
         </section>
       </section>
     </div>

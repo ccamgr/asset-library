@@ -4,6 +4,7 @@ import { invoke, listen } from "./lib/api";
 import { useContextMenu } from "./lib/context-menu";
 import { openTextDialog } from "./lib/text-dialog";
 import { confirmDialog } from "./lib/confirm-dialog";
+import { appendPath, directoryOf } from "./lib/utils";
 import { AssetDialog } from "./components/AssetDialog";
 import { AssetEditDialog } from "./components/AssetEditDialog";
 import { LegacyImportDialog } from "./components/LegacyImportDialog";
@@ -64,6 +65,7 @@ function App() {
   const [assetEditDialogOpen, setAssetEditDialogOpen] = useState(false);
   const [legacyImportOpen, setLegacyImportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -151,7 +153,7 @@ function App() {
     setStatus(next);
     setStoragePath(next.assetStoragePath ?? next.defaultAssetStoragePath);
     setBackupPath(next.databaseBackupPath ?? next.defaultDatabaseBackupPath);
-    setDatabasePath(next.databasePath ?? next.defaultDatabasePath);
+    setDatabasePath(directoryOf(next.databasePath ?? next.defaultDatabasePath));
     if (!next.initialized) return;
     const [, nextTags, nextCategories] =
       await Promise.all([
@@ -269,10 +271,11 @@ function App() {
         request: {
           assetStoragePath: storagePath,
           databaseBackupPath: backupPath,
-          databasePath,
+          databasePath: appendPath(databasePath, "library.db"),
         },
       });
       await refresh();
+      setSetupOpen(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -436,7 +439,7 @@ function App() {
   );
 
   if (!status) return <main className="loading">読み込み中…</main>;
-  if (!status.initialized)
+  if (!status.initialized || setupOpen)
     return (
       <>
         <SetupScreen
@@ -444,9 +447,6 @@ function App() {
           backupPath={backupPath}
           databasePath={databasePath}
           busy={busy}
-          setStoragePath={setStoragePath}
-          setBackupPath={setBackupPath}
-          setDatabasePath={setDatabasePath}
           onChooseStorage={() =>
             void chooseDirectory("アセット保存先", setStoragePath)
           }
@@ -454,11 +454,10 @@ function App() {
             void chooseDirectory("DBバックアップ先", setBackupPath)
           }
           onChooseDatabase={() =>
-            void chooseDirectory("DB本体の保存先", (path) =>
-              setDatabasePath(`${path.replace(/[\\/]$/, "")}/library.db`),
-            )
+            void chooseDirectory("DB本体の保存先", setDatabasePath)
           }
           onInitialize={() => void initialize()}
+          onCancel={status.initialized ? () => setSetupOpen(false) : undefined}
         />
         <ToastStack
           message={message}
@@ -607,7 +606,7 @@ function App() {
           onStarted={(total) => setLegacyProgress({ completed: 0, total })}
         />
       )}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenLegacyImport={openLegacyImportFromSettings} onError={reportFailure} onMessage={setMessage} libraryViewSize={libraryViewSize} onLibraryViewSizeChange={updateLibraryViewSize} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onOpenLegacyImport={openLegacyImportFromSettings} onError={reportFailure} onMessage={setMessage} onReconfigureLibrary={() => setSetupOpen(true)} libraryViewSize={libraryViewSize} onLibraryViewSizeChange={updateLibraryViewSize} />}
     </div>
   );
 }

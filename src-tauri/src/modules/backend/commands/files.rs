@@ -26,8 +26,14 @@ pub(crate) fn add_asset_files(
     }
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
     let database_path = locations.database_path.clone();
-    let destination = asset_files_directory(&locations.asset_storage_root, &request.asset_id)
-        .map_err(|error| error.to_string())?;
+    let asset_directory =
+        existing_asset_directory(&locations.asset_storage_root, &request.asset_id)
+            .map_err(|error| error.to_string())?
+            .unwrap_or(
+                asset_directory(&locations.asset_storage_root, &request.asset_id)
+                    .map_err(|error| error.to_string())?,
+            );
+    let destination = asset_directory.join("files");
     let connection = Connection::open(&database_path).map_err(|error| error.to_string())?;
     let exists: bool = connection
         .query_row(
@@ -83,7 +89,7 @@ pub(crate) fn add_asset_files(
     let timestamp = unix_timestamp();
     let result = (|| -> LibraryResult<()> {
         for file in &files {
-            transaction.execute("INSERT INTO asset_files (id, asset_id, storage_mode, relative_path, external_path, original_filename, byte_size, sha256, created_at) VALUES (?1, ?2, 'managed', ?3, NULL, ?4, ?5, NULL, ?6)", params![file.id, request.asset_id, asset_relative_path(&request.asset_id, &format!("files/{}", file.stored_filename))?, file.original_filename, file.byte_size as i64, timestamp])?;
+            transaction.execute("INSERT INTO asset_files (id, asset_id, storage_mode, relative_path, external_path, original_filename, byte_size, sha256, created_at) VALUES (?1, ?2, 'managed', ?3, NULL, ?4, ?5, NULL, ?6)", params![file.id, request.asset_id, asset_relative_path_in_directory(&locations.asset_storage_root, &asset_directory, &format!("files/{}", file.stored_filename))?, file.original_filename, file.byte_size as i64, timestamp])?;
         }
         transaction.execute(
             "UPDATE assets SET updated_at=?1 WHERE id=?2",
@@ -107,7 +113,7 @@ pub(crate) fn delete_asset_file(
     let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
     let database_path = locations.database_path.clone();
     let connection = Connection::open(&database_path).map_err(|error| error.to_string())?;
-    let (asset_id, storage_mode, relative): (String, String, Option<String>) = connection
+    let (_asset_id, storage_mode, relative): (String, String, Option<String>) = connection
         .query_row(
             "SELECT asset_id, storage_mode, relative_path FROM asset_files WHERE id=?1",
             params![file_id],
@@ -115,16 +121,11 @@ pub(crate) fn delete_asset_file(
         )
         .map_err(|error| error.to_string())?;
     if storage_mode == "managed" {
-        let filename = Path::new(
+        let path = locations.asset_storage_root.join(
             relative
                 .as_deref()
                 .ok_or_else(|| "管理ファイルの保存先が不正です".to_string())?,
-        )
-        .file_name()
-        .ok_or_else(|| "管理ファイルの保存先が不正です".to_string())?;
-        let path = asset_files_directory(&locations.asset_storage_root, &asset_id)
-            .map_err(|error| error.to_string())?
-            .join(filename);
+        );
         if path.is_file() {
             let deletion_path = path.with_file_name(format!(".deleting-{file_id}"));
             fs::rename(&path, &deletion_path).map_err(|error| error.to_string())?;

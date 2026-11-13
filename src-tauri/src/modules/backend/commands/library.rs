@@ -62,6 +62,16 @@ pub(crate) fn initialize_library(
         .transpose()
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| library_path.join(DATABASE_FILE));
+    if database_path.is_file() {
+        let report = asset_storage_integrity_report(&database_path, &asset_storage_path)
+            .map_err(|error| error.to_string())?;
+        if !report.missing_asset_ids.is_empty() {
+            return Err(format!(
+                "指定したアセット保存先には、DBに登録された{}件のアセット保存フォルダがありません。保存先とDBの組み合わせを確認してください",
+                report.missing_asset_ids.len()
+            ));
+        }
+    }
     prepare_library(
         &library_path,
         &database_path,
@@ -105,7 +115,7 @@ pub(crate) fn import_files(
     let library_path = default_library_path(&app).map_err(|error| error.to_string())?;
     let asset_storage_path = settings
         .asset_storage_path
-        .unwrap_or_else(|| library_path.join("assets"));
+        .unwrap_or_else(|| library_path.join("asset-storage"));
     let database_path = settings
         .database_path
         .unwrap_or_else(|| library_path.join(DATABASE_FILE));

@@ -45,8 +45,18 @@ pub(crate) fn set_asset_cover(
         .map(str::to_ascii_lowercase)
         .filter(|value| ["png", "jpg", "jpeg", "webp", "gif"].contains(&value.as_str()))
         .ok_or_else(|| "PNG、JPEG、WebP、GIF画像を選んでください".to_string())?;
-    let relative_path = asset_relative_path(&asset_id, &format!("cover.{extension}"))
-        .map_err(|error| error.to_string())?;
+    let asset_directory = existing_asset_directory(&locations.asset_storage_root, &asset_id)
+        .map_err(|error| error.to_string())?
+        .unwrap_or(
+            asset_directory(&locations.asset_storage_root, &asset_id)
+                .map_err(|error| error.to_string())?,
+        );
+    let relative_path = asset_relative_path_in_directory(
+        &locations.asset_storage_root,
+        &asset_directory,
+        &format!("cover.{extension}"),
+    )
+    .map_err(|error| error.to_string())?;
     let destination = locations.asset_storage_root.join(&relative_path);
     let old_path: Option<String> = Connection::open(&locations.database_path)
         .map_err(|error| error.to_string())?

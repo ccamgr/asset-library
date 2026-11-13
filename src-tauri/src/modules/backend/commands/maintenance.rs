@@ -1,4 +1,14 @@
 #[tauri::command]
+pub(crate) fn check_asset_storage_integrity(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AssetStorageIntegrityReport, String> {
+    let locations = storage_locations(&app, &state).map_err(|error| error.to_string())?;
+    asset_storage_integrity_report(&locations.database_path, &locations.asset_storage_root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub(crate) fn rebuild_thumbnail_cache(
     app: AppHandle,
     state: State<'_, AppState>,

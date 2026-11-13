@@ -192,12 +192,16 @@ pub(crate) fn remove_imported_asset(
     asset_storage_root: &Path,
     asset_id: &str,
 ) -> LibraryResult<()> {
-    let asset_directory = asset_directory(asset_storage_root, asset_id)?;
-    let deletion_directory = asset_storage_root
-        .join("assets")
-        .join(format!(".deleting-{}", Uuid::now_v7()));
-    if asset_directory.exists() {
-        fs::rename(&asset_directory, &deletion_directory)?;
+    let asset_directory = existing_asset_directory(asset_storage_root, asset_id)?;
+    let deletion_directory = asset_directory.as_ref().and_then(|directory| {
+        directory
+            .parent()
+            .map(|parent| parent.join(format!(".deleting-{}", Uuid::now_v7())))
+    });
+    if let (Some(asset_directory), Some(deletion_directory)) =
+        (&asset_directory, &deletion_directory)
+    {
+        fs::rename(asset_directory, deletion_directory)?;
     }
 
     let result = (|| -> LibraryResult<()> {
@@ -211,13 +215,19 @@ pub(crate) fn remove_imported_asset(
     })();
 
     if let Err(error) = result {
-        if deletion_directory.exists() {
-            let _ = fs::rename(&deletion_directory, &asset_directory);
+        if let (Some(asset_directory), Some(deletion_directory)) =
+            (&asset_directory, &deletion_directory)
+        {
+            if deletion_directory.exists() {
+                let _ = fs::rename(deletion_directory, asset_directory);
+            }
         }
         return Err(error);
     }
-    if deletion_directory.exists() {
-        fs::remove_dir_all(deletion_directory)?;
+    if let Some(deletion_directory) = deletion_directory {
+        if deletion_directory.exists() {
+            fs::remove_dir_all(deletion_directory)?;
+        }
     }
     Ok(())
 }
